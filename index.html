@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Création</title>
+<style>
+  :root { --bg:#0d1420; --card:#151e2c; --fg:#e8edf5; --muted:#8b97a8; --accent:#4a90d9; --gold:#f5b342; --red:#e5534b; --pad:#ecedf0; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden; user-select:none; -webkit-user-select:none; touch-action:none; overscroll-behavior:none; }
+  #app { display:flex; flex-direction:column; gap:8px; height:100%; padding:10px; }
+  .row { display:flex; gap:6px; align-items:center; }
+  .pill { border:0; border-radius:13px; padding:7px 11px; font:600 13px system-ui; color:var(--fg); background:rgba(255,255,255,.09); white-space:nowrap; }
+  .pill.on { background:rgba(74,144,217,.45); }
+  .grow { flex:1; min-width:0; }
+  .card { border-radius:16px; padding:9px 10px; display:flex; flex-direction:column; gap:7px; }
+  .solo { background:rgba(74,144,217,.10); border:1px solid rgba(74,144,217,.55); flex:1; min-height:0; }
+  .acc { background:rgba(245,179,66,.08); border:1px solid rgba(245,179,66,.55); }
+  .tag { font:800 12px system-ui; letter-spacing:1.2px; }
+  .title { font:600 13px system-ui; color:var(--fg); opacity:.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; }
+  .chips .pill { font-size:12px; padding:6px 10px; }
+  #pads { flex:1; display:flex; flex-direction:column; gap:6px; min-height:0; }
+  .prow { flex:1; display:flex; gap:4px; min-height:0; }
+  .p { flex:1; border-radius:10px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; padding-bottom:10px; transition:filter .05s; }
+  .p b { font-size:14px; } .p i { font-style:normal; font-size:11px; opacity:.65; font-weight:600; }
+  .p.ch { background:var(--gold); } .p.av { background:#a94a4d; color:#fff; } .p.down { background:var(--accent); color:#fff; }
+  .chords { display:grid; grid-template-columns:repeat(12,1fr); gap:6px; }
+  .c { grid-column:span 3; height:66px; border-radius:14px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08); display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .c.r2 { grid-column:span 4; }
+  .c small { font:700 11px system-ui; color:var(--accent); } .c.i0 small { color:var(--gold); }
+  .c b { font:700 16px system-ui; }
+  .c.on { background:rgba(74,144,217,.55); } .c.on small { color:#fff; }
+  .c.nx { border:2px solid rgba(245,179,66,.9); }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  .lbl { font-size:11px; color:var(--muted); }
+  #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:60px; z-index:5; }
+  #over .box { background:var(--card); border-radius:16px; padding:14px; width:calc(100% - 40px); display:flex; flex-direction:column; gap:8px; }
+  #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="row">
+    <button class="pill on" id="keyBtn"></button>
+    <span id="stacks" class="row"></span>
+    <span class="grow"></span>
+  </div>
+  <div class="card solo">
+    <div class="row">
+      <span class="tag" style="color:var(--accent)">SOLO</span>
+      <span class="title grow" id="scaleTitle"></span>
+      <button class="pill" id="tSolo"></button>
+      <button class="pill" id="octDn">−</button>
+      <span class="lbl" id="octLbl"></span>
+      <button class="pill" id="octUp">+</button>
+    </div>
+    <div class="chips" id="scales"></div>
+    <div id="pads"></div>
+  </div>
+  <div class="card acc">
+    <div class="row">
+      <span class="tag" style="color:var(--gold)">ACCORDS</span>
+      <span class="title grow" id="chordTitle"></span>
+      <button class="pill" id="tPad"></button>
+      <button class="pill" id="stop">⏹</button>
+    </div>
+    <div class="chords" id="chords"></div>
+  </div>
+  <div class="row">
+    <span class="lbl">Accords</span><input type="range" id="vPad" min="0" max="100">
+    <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="100">
+  </div>
+</div>
+<div id="over"><div class="box">
+  <div class="lbl">Tonalité</div><div class="chips" id="keys"></div>
+  <div class="lbl">Mode</div><div class="chips" id="modes"></div>
+</div></div>
+<div id="start">Touche pour commencer</div>
+<script>
+const D = {"types":{"maj":{"sym":"","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"]],"sug":0},"m":{"sym":"m","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"]],"sug":5},"dim":{"sym":"°","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"]],"sug":27},"aug":{"sym":"+","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"]],"sug":25},"maj7":{"sym":"maj7","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"]],"sug":0},"7":{"sym":"7","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"]],"sug":4},"m7":{"sym":"m7","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"]],"sug":1},"mmaj7":{"sym":"m(maj7)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"]],"sug":8},"m7b5":{"sym":"ø7","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"]],"sug":6},"dim7":{"sym":"°7","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"]],"sug":27},"maj9":{"sym":"maj9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[14,1,"9"]],"sug":3},"9":{"sym":"9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":4},"m9":{"sym":"m9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":1},"7b9":{"sym":"7♭9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":26},"m11":{"sym":"m11","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[17,3,"11"]],"sug":1},"9sus4":{"sym":"9sus4","tones":[[0,0,"1"],[5,3,"4"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":4},"x0_4_8_11":{"sym":"maj7♯5","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"]],"sug":10},"x0_3_6_10_13":{"sym":"m7♭5♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":6},"x0_3_6_10_14":{"sym":"m9♭5","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[14,1,"9"]],"sug":13},"x0_3_6_9_13":{"sym":"°7♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"],[13,1,"♭9"]],"sug":-1},"x0_3_7_10_13":{"sym":"m7♭9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":2},"x0_3_7_11_14":{"sym":"m(maj9)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"],[14,1,"9"]],"sug":7},"x0_4_7_11_15":{"sym":"maj7♯9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[15,1,"♯9"]],"sug":16},"x0_4_8_11_14":{"sym":"maj9♯5","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"]],"sug":10},"x0_7_10_13_17":{"sym":"11♭9","tones":[[0,0,"1"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":15},"x0_7_11_14_17":{"sym":"maj11","tones":[[0,0,"1"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":0},"x0_8_11_14_17":{"sym":"maj11♯5","tones":[[0,0,"1"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":-1},"x0_3_6_10_13_16":{"sym":"m7♭5♭9♭11","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"],[16,3,"♭11"]],"sug":14},"x0_3_6_10_13_17":{"sym":"m11♭5♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":6},"x0_3_6_10_14_17":{"sym":"m11♭5","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[14,1,"9"],[17,3,"11"]],"sug":13},"x0_3_6_9_13_16":{"sym":"°7♭9♭11","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"],[13,1,"♭9"],[16,3,"♭11"]],"sug":-1},"x0_3_7_10_13_17":{"sym":"m11♭9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":2},"x0_3_7_10_14_18":{"sym":"m9♯11","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[18,3,"♯11"]],"sug":17},"x0_3_7_11_14_17":{"sym":"m(maj11)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":7},"x0_4_7_10_14_18":{"sym":"9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[18,3,"♯11"]],"sug":11},"x0_4_7_11_14_18":{"sym":"maj9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[18,3,"♯11"]],"sug":3},"x0_4_7_11_15_18":{"sym":"maj7♯9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[15,1,"♯9"],[18,3,"♯11"]],"sug":16},"x0_4_8_11_14_18":{"sym":"maj9♯5♯11","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"],[18,3,"♯11"]],"sug":10}},"modes":[{"id":"ionian","short":"Majeur","minor":false,"iv":[0,2,4,5,7,9,11],"stacks":{"tri":["maj","m","m","maj","maj","m","dim"],"sev":["maj7","m7","m7","maj7","7","m7","m7b5"],"9":["maj9","m9","x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13"],"11":["x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17"]}},{"id":"dorian","short":"Dorien","minor":true,"iv":[0,2,3,5,7,9,10],"stacks":{"tri":["m","m","maj","maj","m","dim","maj"],"sev":["m7","m7","maj7","7","m7","m7b5","maj7"],"9":["m9","x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13","maj9"],"11":["m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17"]}},{"id":"phrygian","short":"Phrygien","minor":true,"iv":[0,1,3,5,7,8,10],"stacks":{"tri":["m","maj","maj","m","dim","maj","m"],"sev":["m7","maj7","7","m7","m7b5","maj7","m7"],"9":["x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13","maj9","m9"],"11":["x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11"]}},{"id":"lydian","short":"Lydien","minor":false,"iv":[0,2,4,6,7,9,11],"stacks":{"tri":["maj","maj","m","dim","maj","m","m"],"sev":["maj7","7","m7","m7b5","maj7","m7","m7"],"9":["maj9","9","m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13"],"11":["x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17"]}},{"id":"mixolydian","short":"Mixo","minor":false,"iv":[0,2,4,5,7,9,10],"stacks":{"tri":["maj","m","dim","maj","m","m","maj"],"sev":["7","m7","m7b5","maj7","m7","m7","maj7"],"9":["9","m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9"],"11":["9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18"]}},{"id":"aeolian","short":"Mineur","minor":true,"iv":[0,2,3,5,7,8,10],"stacks":{"tri":["m","dim","maj","m","m","maj","maj"],"sev":["m7","m7b5","maj7","m7","m7","maj7","7"],"9":["m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9","9"],"11":["m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4"]}},{"id":"locrian","short":"Locrien","minor":true,"iv":[0,1,3,5,6,8,10],"stacks":{"tri":["dim","maj","m","m","maj","maj","m"],"sev":["m7b5","maj7","m7","m7","maj7","7","m7"],"9":["x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9","9","m9"],"11":["x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11"]}},{"id":"harmminor","short":"Min. harm.","minor":true,"iv":[0,2,3,5,7,8,11],"stacks":{"tri":["m","dim","aug","m","maj","maj","dim"],"sev":["mmaj7","m7b5","x0_4_8_11","m7","7","maj7","dim7"],"9":["x0_3_7_11_14","x0_3_6_10_13","x0_4_8_11_14","m9","7b9","x0_4_7_11_15","x0_3_6_9_13"],"11":["x0_3_7_11_14_17","x0_3_6_10_13_17","x0_8_11_14_17","x0_3_7_10_14_18","x0_7_10_13_17","x0_4_7_11_15_18","x0_3_6_9_13_16"]}},{"id":"melminor","short":"Min. mél.","minor":true,"iv":[0,2,3,5,7,9,11],"stacks":{"tri":["m","m","aug","maj","maj","dim","dim"],"sev":["mmaj7","m7","x0_4_8_11","7","7","m7b5","m7b5"],"9":["x0_3_7_11_14","x0_3_7_10_13","x0_4_8_11_14","9","9","x0_3_6_10_14","x0_3_6_10_13"],"11":["x0_3_7_11_14_17","x0_3_7_10_13_17","x0_4_8_11_14_18","x0_4_7_10_14_18","9sus4","x0_3_6_10_14_17","x0_3_6_10_13_16"]}}],"gscales":[{"i":0,"name":"Ionien (majeur)","mask":[1,0,1,0,1,1,0,1,0,1,0,1],"n":7},{"i":1,"name":"Dorien","mask":[1,0,1,1,0,1,0,1,0,1,1,0],"n":7},{"i":2,"name":"Phrygien","mask":[1,1,0,1,0,1,0,1,1,0,1,0],"n":7},{"i":3,"name":"Lydien","mask":[1,0,1,0,1,0,1,1,0,1,0,1],"n":7},{"i":4,"name":"Mixolydien","mask":[1,0,1,0,1,1,0,1,0,1,1,0],"n":7},{"i":5,"name":"Éolien (mineur)","mask":[1,0,1,1,0,1,0,1,1,0,1,0],"n":7},{"i":6,"name":"Locrien","mask":[1,1,0,1,0,1,1,0,1,0,1,0],"n":7},{"i":7,"name":"Mineur harmonique","mask":[1,0,1,1,0,1,0,1,1,0,0,1],"n":7},{"i":8,"name":"Mineur mélodique","mask":[1,0,1,1,0,1,0,1,0,1,0,1],"n":7},{"i":9,"name":"Dorien ♭2","mask":[1,1,0,1,0,1,0,1,0,1,1,0],"n":7},{"i":10,"name":"Lydien augmenté","mask":[1,0,1,0,1,0,1,0,1,1,0,1],"n":7},{"i":11,"name":"Lydien dominant","mask":[1,0,1,0,1,0,1,1,0,1,1,0],"n":7},{"i":12,"name":"Mixolydien ♭6","mask":[1,0,1,0,1,1,0,1,1,0,1,0],"n":7},{"i":13,"name":"Locrien ♯2","mask":[1,0,1,1,0,1,1,0,1,0,1,0],"n":7},{"i":14,"name":"Altérée","mask":[1,1,0,1,1,0,1,0,1,0,1,0],"n":7},{"i":15,"name":"Phrygien dominant","mask":[1,1,0,0,1,1,0,1,1,0,1,0],"n":7},{"i":16,"name":"Lydien ♯2","mask":[1,0,0,1,1,0,1,1,0,1,0,1],"n":7},{"i":17,"name":"Dorien ukrainien","mask":[1,0,1,1,0,0,1,1,0,1,1,0],"n":7},{"i":18,"name":"Majeur harmonique","mask":[1,0,1,0,1,1,0,1,1,0,0,1],"n":7},{"i":19,"name":"Mineur hongrois","mask":[1,0,1,1,0,0,1,1,1,0,0,1],"n":7},{"i":20,"name":"Double harmonique","mask":[1,1,0,0,1,1,0,1,1,0,0,1],"n":7},{"i":21,"name":"Pentatonique majeure","mask":[1,0,1,0,1,0,0,1,0,1,0,0],"n":5},{"i":22,"name":"Pentatonique mineure","mask":[1,0,0,1,0,1,0,1,0,0,1,0],"n":5},{"i":23,"name":"Blues","mask":[1,0,0,1,0,1,1,1,0,0,1,0],"n":6},{"i":24,"name":"Blues majeur","mask":[1,0,1,1,1,0,0,1,0,1,0,0],"n":6},{"i":25,"name":"Par tons","mask":[1,0,1,0,1,0,1,0,1,0,1,0],"n":6},{"i":26,"name":"Diminuée demi-ton/ton","mask":[1,1,0,1,1,0,1,1,0,1,1,0],"n":8},{"i":27,"name":"Diminuée ton/demi-ton","mask":[1,0,1,1,0,1,1,0,1,1,0,1],"n":8},{"i":28,"name":"Bebop dominant","mask":[1,0,1,0,1,1,0,1,0,1,1,1],"n":8},{"i":29,"name":"Bebop majeur","mask":[1,0,1,0,1,1,0,1,1,1,0,1],"n":8}],"spell":[["Do","Do♯","Do𝄪","?","?","?","?","?","?","?","Do𝄫","Do♭"],["Ré𝄫","Ré♭","Ré","Ré♯","Ré𝄪","?","?","?","?","?","?","?"],["?","?","Mi𝄫","Mi♭","Mi","Mi♯","Mi𝄪","?","?","?","?","?"],["?","?","?","Fa𝄫","Fa♭","Fa","Fa♯","Fa𝄪","?","?","?","?"],["?","?","?","?","?","Sol𝄫","Sol♭","Sol","Sol♯","Sol𝄪","?","?"],["?","?","?","?","?","?","?","La𝄫","La♭","La","La♯","La𝄪"],["Si♯","Si𝄪","?","?","?","?","?","?","?","Si𝄫","Si♭","Si"]]};
+// ------------------------------------------------------------------ état (gardé dans le navigateur)
+const S = Object.assign({ root: 0, rootL: 0, mode: "ionian", stack: "sev", oct: 0, tSolo: "carre", tPad: "cordes", vPad: 55, vSolo: 75 },
+  (() => { try { return JSON.parse(localStorage.getItem("creation") || "{}"); } catch (e) { return {}; } })());
+const save = () => { try { localStorage.setItem("creation", JSON.stringify(S)); } catch (e) {} };
+let cur = null;      // accord en cours {pc, l, t, i}
+let selS = null;     // gamme choisie {s, t}
+
+// ------------------------------------------------------------------ harmonie (comme la page Musique et le scriptlet)
+const keyL = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6];
+const NUM = ["I", "II", "III", "IV", "V", "VI", "VII"];
+const MAJ = [0, 2, 4, 5, 7, 9, 11];
+const TENS = ["1", "♭9", "9", "♯9", "3", "11", "♯11", "5", "♭13", "13", "♭7", "7"];
+const NEXT_MAJ = [[5, 7, 9, 2], [], [7, 5, 11], [], [9, 5], [7, 0, 2], [], [0, 9, 5], [], [2, 5, 7, 4], [], [0, 4]];
+const NEXT_MIN = [[5, 8, 10, 7], [], [7], [8, 5], [], [7, 0, 10], [], [0, 8], [10, 5, 7], [], [3, 0], []];
+const sp = D.spell;
+const mode = () => D.modes.find(m => m.id === S.mode) || D.modes[0];
+function keyScale() { const iv = mode().iv; return iv.map((x, i) => ({ pc: (S.root + x) % 12, l: (S.rootL + i) % 7 })); }
+function nameOf(pc) { const ks = keyScale(); const k = ks.find(n => n.pc === pc); return k ? sp[k.l][pc] : sp[keyL[pc]][pc]; }
+function chords() {
+  const m = mode(), iv = m.iv;
+  return iv.map((x, i) => {
+    const t = m.stacks[S.stack][i];
+    const acc = x - MAJ[i];
+    const t3 = (iv[(i + 2) % 7] - x + 12) % 12;
+    return { i, pc: (S.root + x) % 12, l: (S.rootL + i) % 7, t, acc, minor: t3 === 3 };
+  });
+}
+function chordPcs(c) { return [...new Set(D.types[c.t].tones.map(x => (c.pc + x[0]) % 12))]; }
+function scaleCands() {
+  if (!cur) return [];
+  const pcs = chordPcs(cur), keyPcs = keyScale().map(n => n.pc), sug = D.types[cur.t].sug;
+  const out = [];
+  for (let sh = 0; sh < 12; sh++) for (const g of D.gscales) {
+    const t = (cur.pc + sh) % 12;
+    if (!pcs.every(p => g.mask[(p - t + 12) % 12] === 1)) continue;
+    let score = -g.n + (sh === 0 ? 4 + (g.i === sug ? 12 : 0) : 0);
+    for (let i = 0; i < 12; i++) if (g.mask[(i - t + 12) % 12] === 1 && keyPcs.includes(i)) score += 3;
+    out.push({ g, t, sh, score });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 4);
+}
+
+// ------------------------------------------------------------------ synthé WebAudio
+let ac = null, master, busPad, busSolo;
+function audio() {
+  if (ac) return;
+  ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
+  master = ac.createGain(); master.gain.value = 0.9;
+  busPad = ac.createGain(); busSolo = ac.createGain();
+  busPad.connect(master); busSolo.connect(master); master.connect(comp); comp.connect(ac.destination);
+  mix();
+}
+function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 0.5; busSolo.gain.value = S.vSolo / 100 * 0.6; }
+const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+
+// Une voix : oscillateurs -> filtre passe-bas -> enveloppe. Timbres doux.
+function voice(n, vel, timbre, bus) {
+  const t0 = ac.currentTime, f = hz(n);
+  const out = ac.createGain(); out.gain.value = 0;
+  const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.Q.value = 0.3;
+  lp.connect(out); out.connect(bus);
+  const oscs = [];
+  let att, sus, rel;
+  if (timbre === "carre") {            // carré doux : flûte / orgue doux
+    const o = ac.createOscillator(); o.type = "square"; o.frequency.value = f;
+    const s = ac.createOscillator(); s.type = "sine"; s.frequency.value = f;
+    const sg = ac.createGain(); sg.gain.value = 0.6; s.connect(sg); sg.connect(lp);
+    const og = ac.createGain(); og.gain.value = 0.35; o.connect(og); og.connect(lp);
+    lp.frequency.value = Math.min(2600, f * 3.2);
+    const lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = 5.2; lg.gain.value = 0;
+    lg.gain.setValueAtTime(0, t0); lg.gain.linearRampToValueAtTime(f * 0.004, t0 + 0.5);
+    lfo.connect(lg); lg.connect(o.frequency); lg.connect(s.frequency);
+    oscs.push(o, s, lfo); att = 0.008; sus = 0.8; rel = 0.12;
+  } else {                              // cordes douces / nappe : trois scies désaccordées, filtrées
+    const bright = timbre === "nappe" ? 2.6 : 1.2;
+    for (const c of [-7, 0, 7]) { const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = f; o.detune.value = c; o.connect(lp); oscs.push(o); }
+    lp.frequency.setValueAtTime(Math.min(5000, f * bright * 1.5), t0);
+    lp.frequency.linearRampToValueAtTime(Math.min(4000, f * bright), t0 + 0.4);
+    att = timbre === "nappe" ? 0.05 : 0.09; sus = 0.75; rel = 0.3;
+  }
+  const peak = vel * (timbre === "carre" ? 0.5 : 0.22);
+  out.gain.setValueAtTime(0, t0);
+  out.gain.linearRampToValueAtTime(peak, t0 + att);
+  out.gain.setTargetAtTime(peak * sus, t0 + att, 0.4);
+  oscs.forEach(o => o.start(t0));
+  return { stop() {
+    const t = ac.currentTime;
+    out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
+    out.gain.setTargetAtTime(0, t, rel / 4);
+    oscs.forEach(o => o.stop(t + rel * 1.5));
+    setTimeout(() => out.disconnect(), (rel * 1.5 + 0.1) * 1000);
+  } };
+}
+let chordVoices = [];
+function playChord(c) {
+  audio();
+  chordVoices.forEach(v => v.stop());
+  const base = 48 + c.pc - (c.pc >= 7 ? 12 : 0);
+  const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
+  chordVoices = notes.map((n, i) => voice(n, i === 0 ? 0.7 : 0.85, S.tPad, busPad));
+}
+function stopChord() { chordVoices.forEach(v => v.stop()); chordVoices = []; }
+
+// ------------------------------------------------------------------ dessin
+const $ = id => document.getElementById(id);
+const TNAME = { carre: "Carré doux", cordes: "Cordes douces", nappe: "Nappe" };
+const TNEXT = { carre: "cordes", cordes: "nappe", nappe: "carre" };
+let padNotes = [];   // notes affichées, pour le doigt
+function render() {
+  const m = mode();
+  $("keyBtn").textContent = `${nameOf(S.root)} ${m.short.toLowerCase()} ▾`;
+  $("stacks").innerHTML = [["tri", "3 sons"], ["sev", "7e"], ["9", "9e"], ["11", "11e"]].map(([k, l]) => `<button class="pill ${S.stack === k ? "on" : ""}" data-stack="${k}">${l}</button>`).join("");
+  $("tSolo").textContent = TNAME[S.tSolo]; $("tPad").textContent = TNAME[S.tPad];
+  $("octLbl").textContent = `oct. ${S.oct > 0 ? "+" : ""}${S.oct}`;
+  $("vPad").value = S.vPad; $("vSolo").value = S.vSolo;
+  // gamme
+  const cands = scaleCands();
+  const sel = selS || (cands[0] ? { s: cands[0].g.i, t: cands[0].t } : null);
+  const g = sel ? D.gscales.find(x => x.i === sel.s) : null;
+  const tonic = g ? sel.t : S.root;
+  const pcs = g ? [...Array(12).keys()].filter(i => g.mask[(i - tonic + 12) % 12] === 1) : keyScale().map(n => n.pc);
+  $("scaleTitle").textContent = g ? `${nameOf(tonic)} ${g.name.toLowerCase()}` : `${nameOf(S.root)} ${m.short.toLowerCase()}`;
+  const sug = cur ? D.types[cur.t].sug : -1;
+  $("scales").innerHTML = cands.length > 1 ? cands.map(c => `<button class="pill ${sel && sel.s === c.g.i && sel.t === c.t ? "on" : ""}" data-s="${c.g.i}" data-t="${c.t}">${nameOf(c.t)} ${c.g.name.toLowerCase()}${c.g.i === sug && c.sh === 0 ? " ★" : ""}</button>`).join("") : "";
+  // pads
+  const cp = cur ? chordPcs(cur) : [];
+  const avoid = pcs.filter(p => !cp.includes(p) && cp.some(c => (p - c + 12) % 12 === 1));
+  const rel = pcs.map(p => (p - tonic + 12) % 12).sort((a, b) => a - b);
+  const low = 60 + tonic - (tonic >= 6 ? 12 : 0) + 12 * S.oct;
+  const rows = [[...rel.map(r => low + 12 + r), low + 24], rel.map(r => low + r)];
+  padNotes = rows;
+  const role = pc => { if (!cur) return ""; const x = D.types[cur.t].tones.find(t => t[0] % 12 === (pc - cur.pc + 12) % 12); return x ? x[2] : TENS[(pc - cur.pc + 12) % 12]; };
+  $("pads").innerHTML = rows.map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${nameOf(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
+  // accords
+  const cs = chords();
+  const nxt = cur ? (m.minor ? NEXT_MIN : NEXT_MAJ)[(cur.pc - S.root + 12) % 12] : [];
+  $("chordTitle").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}` : "main gauche";
+  $("chords").innerHTML = cs.map(c => {
+    const on = cur && cur.pc === c.pc && cur.t === c.t;
+    const nx = !on && nxt.includes((c.pc - S.root + 12) % 12);
+    const acc = c.acc === -1 ? "♭" : c.acc === 1 ? "♯" : "";
+    return `<div class="c ${c.i >= 4 ? "r2" : ""} i${c.i} ${on ? "on" : ""} ${nx ? "nx" : ""}" data-c="${c.i}"><small>${acc}${c.minor ? NUM[c.i].toLowerCase() : NUM[c.i]}${nx ? " →" : ""}</small><b>${sp[c.l][c.pc]}${D.types[c.t].sym}</b></div>`;
+  }).join("");
+  $("keys").innerHTML = [...Array(12).keys()].map(pc => `<button class="pill ${S.root === pc ? "on" : ""}" data-k="${pc}">${sp[keyL[pc]][pc]}</button>`).join("");
+  $("modes").innerHTML = D.modes.map(x => `<button class="pill ${S.mode === x.id ? "on" : ""}" data-m="${x.id}">${x.short}</button>`).join("");
+  lightPads();
+}
+
+// ------------------------------------------------------------------ jeu : un doigt = une note, glisser change de note
+const fingers = new Map();   // pointerId -> {n, v}
+function lightPads() {
+  const held = new Set([...fingers.values()].map(f => f.n));
+  document.querySelectorAll(".p").forEach(el => el.classList.toggle("down", held.has(+el.dataset.n)));
+}
+function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest(".p"); }
+function fingerTo(id, el, y) {
+  const f = fingers.get(id);
+  const n = el ? +el.dataset.n : null;
+  if (f && f.n === n) return;
+  if (f) { f.v.stop(); fingers.delete(id); }
+  if (n !== null) {
+    audio();
+    const r = el.getBoundingClientRect();
+    const vel = 0.55 + 0.45 * Math.min(1, Math.max(0, (y - r.top) / r.height));
+    fingers.set(id, { n, v: voice(n, vel, S.tSolo, busSolo) });
+  }
+  lightPads();
+}
+const padsEl = $("pads");
+padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY); });
+document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY); });
+const lift = e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, null, 0); };
+document.addEventListener("pointerup", lift);
+document.addEventListener("pointercancel", lift);
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+// accords : un appui joue l'accord et le garde jusqu'au suivant
+$("chords").addEventListener("pointerdown", e => {
+  const el = e.target.closest(".c"); if (!el) return;
+  const c = chords()[+el.dataset.c];
+  cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; selS = null;
+  playChord(c); render();
+});
+$("stop").onclick = () => { stopChord(); cur = null; selS = null; render(); };
+$("scales").addEventListener("click", e => { const b = e.target.closest("[data-s]"); if (!b) return; selS = { s: +b.dataset.s, t: +b.dataset.t }; render(); });
+$("stacks").addEventListener("click", e => { const b = e.target.closest("[data-stack]"); if (!b) return; S.stack = b.dataset.stack; save(); if (cur) { const c = chords()[cur.i]; cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; playChord(c); } render(); });
+$("tSolo").onclick = () => { S.tSolo = TNEXT[S.tSolo]; save(); render(); };
+$("tPad").onclick = () => { S.tPad = TNEXT[S.tPad]; save(); if (cur) playChord(chords()[cur.i]); render(); };
+$("octDn").onclick = () => { S.oct = Math.max(-2, S.oct - 1); save(); render(); };
+$("octUp").onclick = () => { S.oct = Math.min(1, S.oct + 1); save(); render(); };
+$("vPad").oninput = e => { S.vPad = +e.target.value; mix(); save(); };
+$("vSolo").oninput = e => { S.vSolo = +e.target.value; mix(); save(); };
+$("keyBtn").onclick = () => { $("over").style.display = "flex"; };
+$("over").addEventListener("click", e => {
+  const k = e.target.closest("[data-k]"), m = e.target.closest("[data-m]");
+  if (k) { S.root = +k.dataset.k; S.rootL = keyL[S.root]; }
+  if (m) S.mode = m.dataset.m;
+  if (k || m) { save(); stopChord(); cur = null; selS = null; render(); return; }
+  if (e.target === $("over")) $("over").style.display = "none";
+});
+$("start").addEventListener("pointerdown", () => { audio(); ac.resume(); $("start").remove(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { stopChord(); fingers.forEach(f => f.v.stop()); fingers.clear(); } });
+render();
+</script>
+</body>
+</html>
