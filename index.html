@@ -63,6 +63,7 @@
     <div class="row">
       <span class="tag" style="color:var(--gold)">ACCORDS</span>
       <span class="title grow" id="chordTitle"></span>
+      <button class="pill" id="hold"></button>
       <button class="pill" id="tPad"></button>
       <button class="pill" id="stop">⏹</button>
     </div>
@@ -81,9 +82,9 @@
 <script>
 const D = {"types":{"maj":{"sym":"","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"]],"sug":0},"m":{"sym":"m","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"]],"sug":5},"dim":{"sym":"°","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"]],"sug":27},"aug":{"sym":"+","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"]],"sug":25},"maj7":{"sym":"maj7","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"]],"sug":0},"7":{"sym":"7","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"]],"sug":4},"m7":{"sym":"m7","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"]],"sug":1},"mmaj7":{"sym":"m(maj7)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"]],"sug":8},"m7b5":{"sym":"ø7","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"]],"sug":6},"dim7":{"sym":"°7","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"]],"sug":27},"maj9":{"sym":"maj9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[14,1,"9"]],"sug":3},"9":{"sym":"9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":4},"m9":{"sym":"m9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":1},"7b9":{"sym":"7♭9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":26},"m11":{"sym":"m11","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[17,3,"11"]],"sug":1},"9sus4":{"sym":"9sus4","tones":[[0,0,"1"],[5,3,"4"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"]],"sug":4},"x0_4_8_11":{"sym":"maj7♯5","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"]],"sug":10},"x0_3_6_10_13":{"sym":"m7♭5♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":6},"x0_3_6_10_14":{"sym":"m9♭5","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[14,1,"9"]],"sug":13},"x0_3_6_9_13":{"sym":"°7♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"],[13,1,"♭9"]],"sug":-1},"x0_3_7_10_13":{"sym":"m7♭9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"]],"sug":2},"x0_3_7_11_14":{"sym":"m(maj9)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"],[14,1,"9"]],"sug":7},"x0_4_7_11_15":{"sym":"maj7♯9","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[15,1,"♯9"]],"sug":16},"x0_4_8_11_14":{"sym":"maj9♯5","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"]],"sug":10},"x0_7_10_13_17":{"sym":"11♭9","tones":[[0,0,"1"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":15},"x0_7_11_14_17":{"sym":"maj11","tones":[[0,0,"1"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":0},"x0_8_11_14_17":{"sym":"maj11♯5","tones":[[0,0,"1"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":-1},"x0_3_6_10_13_16":{"sym":"m7♭5♭9♭11","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"],[16,3,"♭11"]],"sug":14},"x0_3_6_10_13_17":{"sym":"m11♭5♭9","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":6},"x0_3_6_10_14_17":{"sym":"m11♭5","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[10,6,"♭7"],[14,1,"9"],[17,3,"11"]],"sug":13},"x0_3_6_9_13_16":{"sym":"°7♭9♭11","tones":[[0,0,"1"],[3,2,"♭3"],[6,4,"♭5"],[9,6,"𝄫7"],[13,1,"♭9"],[16,3,"♭11"]],"sug":-1},"x0_3_7_10_13_17":{"sym":"m11♭9","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[13,1,"♭9"],[17,3,"11"]],"sug":2},"x0_3_7_10_14_18":{"sym":"m9♯11","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[18,3,"♯11"]],"sug":17},"x0_3_7_11_14_17":{"sym":"m(maj11)","tones":[[0,0,"1"],[3,2,"♭3"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[17,3,"11"]],"sug":7},"x0_4_7_10_14_18":{"sym":"9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[10,6,"♭7"],[14,1,"9"],[18,3,"♯11"]],"sug":11},"x0_4_7_11_14_18":{"sym":"maj9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[14,1,"9"],[18,3,"♯11"]],"sug":3},"x0_4_7_11_15_18":{"sym":"maj7♯9♯11","tones":[[0,0,"1"],[4,2,"3"],[7,4,"5"],[11,6,"7"],[15,1,"♯9"],[18,3,"♯11"]],"sug":16},"x0_4_8_11_14_18":{"sym":"maj9♯5♯11","tones":[[0,0,"1"],[4,2,"3"],[8,4,"♯5"],[11,6,"7"],[14,1,"9"],[18,3,"♯11"]],"sug":10}},"modes":[{"id":"ionian","short":"Majeur","minor":false,"iv":[0,2,4,5,7,9,11],"stacks":{"tri":["maj","m","m","maj","maj","m","dim"],"sev":["maj7","m7","m7","maj7","7","m7","m7b5"],"9":["maj9","m9","x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13"],"11":["x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17"]}},{"id":"dorian","short":"Dorien","minor":true,"iv":[0,2,3,5,7,9,10],"stacks":{"tri":["m","m","maj","maj","m","dim","maj"],"sev":["m7","m7","maj7","7","m7","m7b5","maj7"],"9":["m9","x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13","maj9"],"11":["m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17"]}},{"id":"phrygian","short":"Phrygien","minor":true,"iv":[0,1,3,5,7,8,10],"stacks":{"tri":["m","maj","maj","m","dim","maj","m"],"sev":["m7","maj7","7","m7","m7b5","maj7","m7"],"9":["x0_3_7_10_13","maj9","9","m9","x0_3_6_10_13","maj9","m9"],"11":["x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11"]}},{"id":"lydian","short":"Lydien","minor":false,"iv":[0,2,4,6,7,9,11],"stacks":{"tri":["maj","maj","m","dim","maj","m","m"],"sev":["maj7","7","m7","m7b5","maj7","m7","m7"],"9":["maj9","9","m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13"],"11":["x0_4_7_11_14_18","9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17"]}},{"id":"mixolydian","short":"Mixo","minor":false,"iv":[0,2,4,5,7,9,10],"stacks":{"tri":["maj","m","dim","maj","m","m","maj"],"sev":["7","m7","m7b5","maj7","m7","m7","maj7"],"9":["9","m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9"],"11":["9sus4","m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18"]}},{"id":"aeolian","short":"Mineur","minor":true,"iv":[0,2,3,5,7,8,10],"stacks":{"tri":["m","dim","maj","m","m","maj","maj"],"sev":["m7","m7b5","maj7","m7","m7","maj7","7"],"9":["m9","x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9","9"],"11":["m11","x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4"]}},{"id":"locrian","short":"Locrien","minor":true,"iv":[0,1,3,5,6,8,10],"stacks":{"tri":["dim","maj","m","m","maj","maj","m"],"sev":["m7b5","maj7","m7","m7","maj7","7","m7"],"9":["x0_3_6_10_13","maj9","m9","x0_3_7_10_13","maj9","9","m9"],"11":["x0_3_6_10_13_17","x0_7_11_14_17","m11","x0_3_7_10_13_17","x0_4_7_11_14_18","9sus4","m11"]}},{"id":"harmminor","short":"Min. harm.","minor":true,"iv":[0,2,3,5,7,8,11],"stacks":{"tri":["m","dim","aug","m","maj","maj","dim"],"sev":["mmaj7","m7b5","x0_4_8_11","m7","7","maj7","dim7"],"9":["x0_3_7_11_14","x0_3_6_10_13","x0_4_8_11_14","m9","7b9","x0_4_7_11_15","x0_3_6_9_13"],"11":["x0_3_7_11_14_17","x0_3_6_10_13_17","x0_8_11_14_17","x0_3_7_10_14_18","x0_7_10_13_17","x0_4_7_11_15_18","x0_3_6_9_13_16"]}},{"id":"melminor","short":"Min. mél.","minor":true,"iv":[0,2,3,5,7,9,11],"stacks":{"tri":["m","m","aug","maj","maj","dim","dim"],"sev":["mmaj7","m7","x0_4_8_11","7","7","m7b5","m7b5"],"9":["x0_3_7_11_14","x0_3_7_10_13","x0_4_8_11_14","9","9","x0_3_6_10_14","x0_3_6_10_13"],"11":["x0_3_7_11_14_17","x0_3_7_10_13_17","x0_4_8_11_14_18","x0_4_7_10_14_18","9sus4","x0_3_6_10_14_17","x0_3_6_10_13_16"]}}],"gscales":[{"i":0,"name":"Ionien (majeur)","mask":[1,0,1,0,1,1,0,1,0,1,0,1],"n":7},{"i":1,"name":"Dorien","mask":[1,0,1,1,0,1,0,1,0,1,1,0],"n":7},{"i":2,"name":"Phrygien","mask":[1,1,0,1,0,1,0,1,1,0,1,0],"n":7},{"i":3,"name":"Lydien","mask":[1,0,1,0,1,0,1,1,0,1,0,1],"n":7},{"i":4,"name":"Mixolydien","mask":[1,0,1,0,1,1,0,1,0,1,1,0],"n":7},{"i":5,"name":"Éolien (mineur)","mask":[1,0,1,1,0,1,0,1,1,0,1,0],"n":7},{"i":6,"name":"Locrien","mask":[1,1,0,1,0,1,1,0,1,0,1,0],"n":7},{"i":7,"name":"Mineur harmonique","mask":[1,0,1,1,0,1,0,1,1,0,0,1],"n":7},{"i":8,"name":"Mineur mélodique","mask":[1,0,1,1,0,1,0,1,0,1,0,1],"n":7},{"i":9,"name":"Dorien ♭2","mask":[1,1,0,1,0,1,0,1,0,1,1,0],"n":7},{"i":10,"name":"Lydien augmenté","mask":[1,0,1,0,1,0,1,0,1,1,0,1],"n":7},{"i":11,"name":"Lydien dominant","mask":[1,0,1,0,1,0,1,1,0,1,1,0],"n":7},{"i":12,"name":"Mixolydien ♭6","mask":[1,0,1,0,1,1,0,1,1,0,1,0],"n":7},{"i":13,"name":"Locrien ♯2","mask":[1,0,1,1,0,1,1,0,1,0,1,0],"n":7},{"i":14,"name":"Altérée","mask":[1,1,0,1,1,0,1,0,1,0,1,0],"n":7},{"i":15,"name":"Phrygien dominant","mask":[1,1,0,0,1,1,0,1,1,0,1,0],"n":7},{"i":16,"name":"Lydien ♯2","mask":[1,0,0,1,1,0,1,1,0,1,0,1],"n":7},{"i":17,"name":"Dorien ukrainien","mask":[1,0,1,1,0,0,1,1,0,1,1,0],"n":7},{"i":18,"name":"Majeur harmonique","mask":[1,0,1,0,1,1,0,1,1,0,0,1],"n":7},{"i":19,"name":"Mineur hongrois","mask":[1,0,1,1,0,0,1,1,1,0,0,1],"n":7},{"i":20,"name":"Double harmonique","mask":[1,1,0,0,1,1,0,1,1,0,0,1],"n":7},{"i":21,"name":"Pentatonique majeure","mask":[1,0,1,0,1,0,0,1,0,1,0,0],"n":5},{"i":22,"name":"Pentatonique mineure","mask":[1,0,0,1,0,1,0,1,0,0,1,0],"n":5},{"i":23,"name":"Blues","mask":[1,0,0,1,0,1,1,1,0,0,1,0],"n":6},{"i":24,"name":"Blues majeur","mask":[1,0,1,1,1,0,0,1,0,1,0,0],"n":6},{"i":25,"name":"Par tons","mask":[1,0,1,0,1,0,1,0,1,0,1,0],"n":6},{"i":26,"name":"Diminuée demi-ton/ton","mask":[1,1,0,1,1,0,1,1,0,1,1,0],"n":8},{"i":27,"name":"Diminuée ton/demi-ton","mask":[1,0,1,1,0,1,1,0,1,1,0,1],"n":8},{"i":28,"name":"Bebop dominant","mask":[1,0,1,0,1,1,0,1,0,1,1,1],"n":8},{"i":29,"name":"Bebop majeur","mask":[1,0,1,0,1,1,0,1,1,1,0,1],"n":8}],"spell":[["Do","Do♯","Do𝄪","?","?","?","?","?","?","?","Do𝄫","Do♭"],["Ré𝄫","Ré♭","Ré","Ré♯","Ré𝄪","?","?","?","?","?","?","?"],["?","?","Mi𝄫","Mi♭","Mi","Mi♯","Mi𝄪","?","?","?","?","?"],["?","?","?","Fa𝄫","Fa♭","Fa","Fa♯","Fa𝄪","?","?","?","?"],["?","?","?","?","?","Sol𝄫","Sol♭","Sol","Sol♯","Sol𝄪","?","?"],["?","?","?","?","?","?","?","La𝄫","La♭","La","La♯","La𝄪"],["Si♯","Si𝄪","?","?","?","?","?","?","?","Si𝄫","Si♭","Si"]]};
 // ------------------------------------------------------------------ état (gardé dans le navigateur)
-const S = Object.assign({ root: 0, rootL: 0, mode: "ionian", stack: "sev", oct: 0, tSolo: "carre", tPad: "cordes", vPad: 55, vSolo: 75 },
-  (() => { try { return JSON.parse(localStorage.getItem("creation") || "{}"); } catch (e) { return {}; } })());
-const save = () => { try { localStorage.setItem("creation", JSON.stringify(S)); } catch (e) {} };
+const S = Object.assign({ root: 0, rootL: 0, mode: "ionian", stack: "sev", oct: 0, tSolo: "carre", tPad: "cordes", vPad: 80, vSolo: 70, hold: false },
+  (() => { try { return JSON.parse(localStorage.getItem("creation2") || "{}"); } catch (e) { return {}; } })());
+const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S)); } catch (e) {} };
 let cur = null;      // accord en cours {pc, l, t, i}
 let selS = null;     // gamme choisie {s, t}
 
@@ -134,7 +135,7 @@ function audio() {
   busPad.connect(master); busSolo.connect(master); master.connect(comp); comp.connect(ac.destination);
   mix();
 }
-function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 0.5; busSolo.gain.value = S.vSolo / 100 * 0.6; }
+function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 1.1; busSolo.gain.value = S.vSolo / 100 * 0.6; }
 const hz = m => 440 * Math.pow(2, (m - 69) / 12);
 
 // Une voix : oscillateurs -> filtre passe-bas -> enveloppe. Timbres doux.
@@ -162,7 +163,7 @@ function voice(n, vel, timbre, bus) {
     lp.frequency.linearRampToValueAtTime(Math.min(4000, f * bright), t0 + 0.4);
     att = timbre === "nappe" ? 0.05 : 0.09; sus = 0.75; rel = 0.3;
   }
-  const peak = vel * (timbre === "carre" ? 0.5 : 0.22);
+  const peak = vel * (timbre === "carre" ? 0.5 : 0.3);
   out.gain.setValueAtTime(0, t0);
   out.gain.linearRampToValueAtTime(peak, t0 + att);
   out.gain.setTargetAtTime(peak * sus, t0 + att, 0.4);
@@ -195,6 +196,7 @@ function render() {
   $("keyBtn").textContent = `${nameOf(S.root)} ${m.short.toLowerCase()} ▾`;
   $("stacks").innerHTML = [["tri", "3 sons"], ["sev", "7e"], ["9", "9e"], ["11", "11e"]].map(([k, l]) => `<button class="pill ${S.stack === k ? "on" : ""}" data-stack="${k}">${l}</button>`).join("");
   $("tSolo").textContent = TNAME[S.tSolo]; $("tPad").textContent = TNAME[S.tPad];
+  $("hold").textContent = S.hold ? "Tenu" : "Au doigt"; $("hold").classList.toggle("on", S.hold);
   $("octLbl").textContent = `oct. ${S.oct > 0 ? "+" : ""}${S.oct}`;
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo;
   // gamme
@@ -206,12 +208,14 @@ function render() {
   $("scaleTitle").textContent = g ? `${nameOf(tonic)} ${g.name.toLowerCase()}` : `${nameOf(S.root)} ${m.short.toLowerCase()}`;
   const sug = cur ? D.types[cur.t].sug : -1;
   $("scales").innerHTML = cands.length > 1 ? cands.map(c => `<button class="pill ${sel && sel.s === c.g.i && sel.t === c.t ? "on" : ""}" data-s="${c.g.i}" data-t="${c.t}">${nameOf(c.t)} ${c.g.name.toLowerCase()}${c.g.i === sug && c.sh === 0 ? " ★" : ""}</button>`).join("") : "";
-  // pads
+  // pads : toujours les mêmes places (les notes de la tonalité, sur deux octaves), comme un clavier ;
+  // chacune joue la note la plus proche dans la gamme de l'accord (comme le scriptlet quantifie la main droite).
   const cp = cur ? chordPcs(cur) : [];
   const avoid = pcs.filter(p => !cp.includes(p) && cp.some(c => (p - c + 12) % 12 === 1));
-  const rel = pcs.map(p => (p - tonic + 12) % 12).sort((a, b) => a - b);
-  const low = 60 + tonic - (tonic >= 6 ? 12 : 0) + 12 * S.oct;
-  const rows = [[...rel.map(r => low + 12 + r), low + 24], rel.map(r => low + r)];
+  const kiv = mode().iv;
+  const low = 60 + S.root - (S.root >= 6 ? 12 : 0) + 12 * S.oct;
+  const snap = n => { for (const d of [0, 1, -1, 2, -2]) if (pcs.includes(((n + d) % 12 + 12) % 12)) return n + d; return n; };
+  const rows = [[...kiv.map(x => low + 12 + x), low + 24].map(snap), kiv.map(x => low + x).map(snap)];
   padNotes = rows;
   const role = pc => { if (!cur) return ""; const x = D.types[cur.t].tones.find(t => t[0] % 12 === (pc - cur.pc + 12) % 12); return x ? x[2] : TENS[(pc - cur.pc + 12) % 12]; };
   $("pads").innerHTML = rows.map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${nameOf(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
@@ -258,9 +262,15 @@ document.addEventListener("pointerup", lift);
 document.addEventListener("pointercancel", lift);
 document.addEventListener("contextmenu", e => e.preventDefault());
 
-// accords : un appui joue l'accord et le garde jusqu'au suivant
+// accords : sonnent tant que le doigt est posé (ou jusqu'au suivant avec « Tenu »)
+let chordPointer = null;
+const chordUp = e => { if (e.pointerId === chordPointer) { chordPointer = null; if (!S.hold) stopChord(); } };
+document.addEventListener("pointerup", chordUp);
+document.addEventListener("pointercancel", chordUp);
+$("hold").onclick = () => { S.hold = !S.hold; save(); if (!S.hold && chordPointer === null) stopChord(); render(); };
 $("chords").addEventListener("pointerdown", e => {
   const el = e.target.closest(".c"); if (!el) return;
+  chordPointer = e.pointerId;
   const c = chords()[+el.dataset.c];
   cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; selS = null;
   playChord(c); render();
