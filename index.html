@@ -155,13 +155,14 @@ function audio() {
   if (ac) return;
   ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
   const comp = ac.createDynamicsCompressor();
-  comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
-  master = ac.createGain(); master.gain.value = 0.9;
+  // Compresseur en douceur, puis un niveau général sous 0 dB : rien ne sature, même un accord de 13e à 8 notes.
+  comp.threshold.value = -20; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.25;
+  master = ac.createGain(); master.gain.value = 0.7;
   busPad = ac.createGain(); busSolo = ac.createGain();
   busPad.connect(master); busSolo.connect(master); master.connect(comp); comp.connect(ac.destination);
   mix();
 }
-function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 1.6; busSolo.gain.value = S.vSolo / 100 * 0.6; }
+function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; }
 const hz = m => 440 * Math.pow(2, (m - 69) / 12);
 
 // ------------------------------------------------------------------ la banque de sons
@@ -262,7 +263,9 @@ function playChord(c) {
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
   const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0);
   const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
-  chordVoices = notes.map((n, i) => voice(n, i === 0 ? 0.7 : 0.85, S.tPad, busPad));
+  // Plus l'accord a de notes, plus chacune est douce : un accord de 8 notes sonne aussi fort qu'une triade, sans saturer.
+  const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
+  chordVoices = notes.map((n, i) => voice(n, (i === 0 ? 0.7 : 0.85) * per, S.tPad, busPad));
 }
 function stopChord() { chordVoices.forEach(v => v.stop()); chordVoices = []; }
 
