@@ -146,7 +146,7 @@ function audio() {
   busPad.connect(master); busSolo.connect(master); master.connect(comp); comp.connect(ac.destination);
   mix();
 }
-function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 1.1; busSolo.gain.value = S.vSolo / 100 * 0.6; }
+function mix() { if (!ac) return; busPad.gain.value = S.vPad / 100 * 1.6; busSolo.gain.value = S.vSolo / 100 * 0.6; }
 const hz = m => 440 * Math.pow(2, (m - 69) / 12);
 
 // ------------------------------------------------------------------ la banque de sons
@@ -193,7 +193,9 @@ function voice(n, vel, id, bus) {
   } else if (P.lp) {                                // passe-bas qui suit la note, avec son enveloppe
     const [mult, max, q, envMult, envDec] = P.lp;
     const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.Q.value = q;
-    const base = Math.min(max, f * mult);
+    // Jamais sous 900 Hz : le haut-parleur d'un téléphone ne rend presque rien en dessous de 200 Hz, et un filtre
+    // trop bas sur une note grave ne laissait passer que ce qu'il ne joue pas (les accords semblaient très faibles).
+    const base = Math.max(Math.min(900, max), Math.min(max, f * mult));
     if (envMult) { lp.frequency.setValueAtTime(Math.min(12000, base * envMult), t0); lp.frequency.setTargetAtTime(base, t0 + 0.005, envDec / 3); }
     else lp.frequency.value = base;
     lp.connect(out); head = lp;
@@ -242,7 +244,8 @@ let chordVoices = [];
 function playChord(c) {
   audio();
   chordVoices.forEach(v => v.stop());
-  const base = 48 + c.pc - (c.pc >= 7 ? 12 : 0);
+  // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
+  const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0);
   const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
   chordVoices = notes.map((n, i) => voice(n, i === 0 ? 0.7 : 0.85, S.tPad, busPad));
 }
