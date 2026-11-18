@@ -9,8 +9,9 @@
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     overflow:hidden; user-select:none; -webkit-user-select:none; touch-action:none; overscroll-behavior:none; }
-  /* En haut, une bande vide : le launcher y pose son bandeau « verrouillé · [ unlock ] » quand la page a la main. */
-  #app { display:flex; flex-direction:column; gap:8px; height:100%; padding:100px 10px 10px; }
+  /* Le bandeau « verrouillé · [ unlock ] » du launcher se pose sur l'en-tête de la face (au-dessus de la page) :
+     la page commence tout en haut, avec les touches du solo. */
+  #app { display:flex; flex-direction:column; gap:8px; height:100%; padding:6px 8px 10px; }
   .row { display:flex; gap:6px; align-items:center; }
   .pill { border:0; border-radius:13px; padding:7px 11px; font:600 13px system-ui; color:var(--fg); background:rgba(255,255,255,.09); white-space:nowrap; }
   .pill.on { background:rgba(74,144,217,.45); }
@@ -25,11 +26,15 @@
   .title { font:600 13px system-ui; color:var(--fg); opacity:.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chips { display:flex; gap:5px; flex-wrap:wrap; }
   .chips .pill { font-size:12px; padding:6px 10px; }
-  /* Le solo comme un clavier d'accordéon : deux colonnes (octave du bas à gauche, du dessus à droite),
-     la note grave en haut et l'aiguë en bas. */
-  #pads { flex:1; display:flex; flex-direction:row; gap:6px; min-height:0; }
-  .prow { flex:1; display:flex; flex-direction:column; gap:4px; min-height:0; }
-  .p { flex:1; min-height:0; border-radius:10px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:10px; transition:filter .05s; }
+  /* Le solo se joue téléphone tourné d'un quart de tour (sens des aiguilles d'une montre) : main gauche sur les accords,
+     main droite sur le solo. En portrait, chaque touche est donc une barre couchée sur toute la largeur, la plus grave
+     en bas (à gauche, téléphone tourné) et la plus aiguë en haut (à droite). Le nom est écrit de côté (−90°) pour se lire
+     à l'endroit une fois le téléphone tourné, près du bord gauche (le haut de la touche, téléphone tourné). */
+  #pads { flex:1; display:flex; flex-direction:column-reverse; gap:3px; min-height:0; }
+  .prow { display:contents; }
+  .p { flex:1; min-width:0; min-height:0; border-radius:7px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:row; align-items:center; justify-content:flex-start; padding-left:6px; gap:2px; transition:filter .05s; }
+  .p b, .p i { display:block; transform:rotate(-90deg); white-space:nowrap; }
+  .p b { font-size:12px !important; width:22px; text-align:center; } .p i { font-size:9px !important; width:14px; text-align:center; }
   .p b { font-size:14px; } .p i { font-style:normal; font-size:11px; opacity:.65; font-weight:600; }
   .p.ch { background:var(--gold); } .p.av { background:#a94a4d; color:#fff; } .p.down { background:var(--accent); color:#fff; }
   .chords { display:grid; grid-template-columns:repeat(12,1fr); gap:6px; }
@@ -42,20 +47,20 @@
   .c.nx { border:2px solid rgba(245,179,66,.9); }
   input[type=range] { flex:1; accent-color:var(--accent); }
   .lbl { font-size:11px; color:var(--muted); }
-  .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:110px; z-index:5; }
+  .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:24px; z-index:5; }
   .over .box, #over .box { background:var(--card); border-radius:16px; padding:14px; width:calc(100% - 40px); display:flex; flex-direction:column; gap:8px; }
   #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
-  #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
+  /* Les noms de son longs se raccourcissent (…) au lieu de pousser ⏹ hors du cadre. */
+  #tSolo, #tPad { min-width:0; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
+  #pads .p { background-image:linear-gradient(to right, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
   .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
 </style>
 </head>
 <body>
 <div id="app">
-  <div class="row">
-    <button class="pill on" id="keyBtn"></button>
-    <span id="stacks" class="scroller grow"></span>
-  </div>
+  <!-- Le solo en haut : une rangée de touches hautes, du grave (à gauche) à l'aigu (à droite), puis ses réglages. -->
   <div class="card solo">
+    <div id="pads"></div>
     <div class="row">
       <span class="tag" style="color:var(--accent)">SOLO</span>
       <span class="title grow" id="scaleTitle"></span>
@@ -65,7 +70,10 @@
       <button class="pill" id="octUp">+</button>
     </div>
     <div class="chips" id="scales"></div>
-    <div id="pads"></div>
+  </div>
+  <div class="row">
+    <button class="pill on" id="keyBtn"></button>
+    <span id="stacks" class="scroller grow"></span>
   </div>
   <div class="card acc">
     <div class="row">
@@ -94,14 +102,14 @@
   <div class="lbl">Tonalité</div><div class="chips" id="keys"></div>
   <div class="lbl">Mode</div><div class="chips" id="modes"></div>
 </div></div>
-<div id="sounds" class="over" style="padding-top:110px"><div class="box" style="max-height:calc(100vh - 130px);overflow-y:auto;touch-action:pan-y;padding-top:0">
+<div id="sounds" class="over" style="padding-top:24px"><div class="box" style="max-height:calc(100vh - 44px);overflow-y:auto;touch-action:pan-y;padding-top:0">
   <!-- Le titre et OK restent visibles en haut quand on fait défiler la liste ; un second bouton ferme en bas. -->
   <div class="row" style="position:sticky;top:0;background:var(--card);padding:12px 0 8px;z-index:1"><b id="soundTitle" class="grow"></b><button class="pill on" id="soundOk" style="padding:9px 18px">OK</button></div>
   <div class="chips" id="soundJump" style="position:sticky;top:52px;background:var(--card);padding-bottom:6px;z-index:1"></div>
   <div id="soundList" style="display:flex;flex-direction:column;gap:6px"></div>
   <button class="pill on" id="soundOk2" style="position:sticky;bottom:0;margin-top:8px;padding:12px;font-size:15px">Fermer</button>
 </div></div>
-<div id="calBox" class="over" style="flex-direction:column;align-items:stretch;padding:110px 20px 20px;gap:14px">
+<div id="calBox" class="over" style="flex-direction:column;align-items:stretch;padding:24px 20px 20px;gap:14px">
   <div class="row"><div id="calMsg" class="grow" style="font:600 16px system-ui;line-height:1.4"></div><button class="pill" id="calClose">✕</button></div>
   <div id="calPad" style="flex:1;border-radius:18px;background:rgba(255,255,255,.08);touch-action:none"></div>
 </div>
@@ -745,19 +753,24 @@ function lightPads() {
   const held = new Map([...fingers.values()].map(f => [f.n, f.vel]));
   // La force jouée : une jauge blanche qui monte du bas de la touche.
   document.querySelectorAll(".p").forEach(el => { const v = held.get(+el.dataset.n); el.classList.toggle("down", v != null);
-    el.style.boxShadow = v != null ? `inset 0 -${Math.round(v * el.clientHeight)}px 0 rgba(255,255,255,.28)` : ""; });
+    el.style.boxShadow = v != null ? `inset -${Math.round(v * el.clientWidth)}px 0 0 rgba(255,255,255,.28)` : ""; });
 }
 function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest(".p"); }
 // Le toucher. « Frappe » (par défaut) : la force du coup, apprise sur le téléphone par un étalonnage
 // (5 coups doux, 5 coups forts) qui choisit le capteur qui fait la différence et dans quel sens :
 // la secousse (accéléromètre), la taille du doigt posé, ou la pression. « Position ↓ » : bas de la touche = fort.
 // « Fixe » : toujours la même force.
-function posVel(el, y) { const r = el.getBoundingClientRect(); return 0.15 + 0.85 * Math.min(1, Math.max(0, (y - r.top) / r.height)); }
+function posVel(el, y, x) {
+  const r = el.getBoundingClientRect();
+  // Touche du solo (barre couchée) : plus près du bord droit (le bas de la touche, téléphone tourné) = plus fort.
+  const k = el.classList.contains("p") && x != null ? (x - r.left) / r.width : (y - r.top) / r.height;
+  return 0.15 + 0.85 * Math.min(1, Math.max(0, k));
+}
 // Avec la pression ou la taille du doigt, la force est connue dès le toucher : la note part directement
 // avec son volume et son timbre (plus brillant quand on appuie fort).
 function touchVel(el, y, e) {
   if (S.touchMode === "fixe") return 0.8;
-  if (S.touchMode === "pos") return posVel(el, y);
+  if (S.touchMode === "pos") return posVel(el, y, e && e.clientX);
   if (e && S.cal && S.cal.f !== "s") return calVel(feat(e)[S.cal.f], false);
   return 0.6;
 }
@@ -995,7 +1008,7 @@ $("tSolo").onclick = () => openSounds("solo");
 $("tPad").onclick = () => openSounds("pad");
 $("sounds").addEventListener("click", e => {
   const jb = e.target.closest("[data-jump]");
-  if (jb) { const box = $("sounds").firstElementChild, t = $("soundList").querySelector(`[data-sec="${jb.dataset.jump}"]`); if (t) box.scrollTop = t.offsetTop - 110; return; }
+  if (jb) { const box = $("sounds").firstElementChild, t = $("soundList").querySelector(`[data-sec="${jb.dataset.jump}"]`); if (t) box.scrollTop = t.offsetTop - 100; return; }
   const bk = e.target.closest("[data-bank]");
   if (bk) { S.bank = bk.dataset.bank; save(); audio(); preload(); renderSoundState(); return; }
   const b = e.target.closest("[data-snd]");
