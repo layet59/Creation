@@ -25,9 +25,11 @@
   .title { font:600 13px system-ui; color:var(--fg); opacity:.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chips { display:flex; gap:5px; flex-wrap:wrap; }
   .chips .pill { font-size:12px; padding:6px 10px; }
-  #pads { flex:1; display:flex; flex-direction:column; gap:6px; min-height:0; }
-  .prow { flex:1; display:flex; gap:4px; min-height:0; }
-  .p { flex:1; border-radius:10px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; padding-bottom:10px; transition:filter .05s; }
+  /* Le solo comme un clavier d'accordéon : deux colonnes (octave du bas à gauche, du dessus à droite),
+     la note grave en haut et l'aiguë en bas. */
+  #pads { flex:1; display:flex; flex-direction:row; gap:6px; min-height:0; }
+  .prow { flex:1; display:flex; flex-direction:column; gap:4px; min-height:0; }
+  .p { flex:1; min-height:0; border-radius:10px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:10px; transition:filter .05s; }
   .p b { font-size:14px; } .p i { font-style:normal; font-size:11px; opacity:.65; font-weight:600; }
   .p.ch { background:var(--gold); } .p.av { background:#a94a4d; color:#fff; } .p.down { background:var(--accent); color:#fff; }
   .chords { display:grid; grid-template-columns:repeat(12,1fr); gap:6px; }
@@ -712,7 +714,7 @@ function render() {
   const rows = [[...kiv.map(x => low + 12 + x), low + 24].map(snap), kiv.map(x => low + x).map(snap)];
   padNotes = rows;
   const role = pc => { if (!cur) return ""; const x = D.types[cur.t].tones.find(t => t[0] % 12 === (pc - cur.pc + 12) % 12); return x ? x[2] : TENS[(pc - cur.pc + 12) % 12]; };
-  $("pads").innerHTML = rows.map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${nameOf(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
+  $("pads").innerHTML = [rows[1], rows[0]].map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${nameOf(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
   // accords
   const cs = chords();
   const suite = S.tab === "suite" && SUITE.length > 0;
