@@ -533,7 +533,7 @@ function posVel(el, y) { const r = el.getBoundingClientRect(); return 0.15 + 0.8
 function touchVel(el, y, e) {
   if (S.touchMode === "fixe") return 0.8;
   if (S.touchMode === "pos") return posVel(el, y);
-  if (e && S.cal && S.cal.f !== "s") return calVel(feat(e)[S.cal.f], true);
+  if (e && S.cal && S.cal.f !== "s") return calVel(feat(e)[S.cal.f]);
   return 0.6;
 }
 // L'accéléromètre : l'intensité de chaque secousse, gardée 600 ms.
@@ -562,19 +562,17 @@ let logN = 0;
 function report(o) { logN++; try { document.title = "vel|" + logN + "|" + JSON.stringify(o); } catch (e) {} }
 let lastInfo = "";
 const showInfo = t => { lastInfo = t; const vi = $("velInfo"); if (vi) vi.textContent = t; };
-// La force : la valeur du capteur placée entre les coups les plus doux et les plus forts que tu as joués
-// (étalonnage + les 80 derniers coups), en continu de 0.12 à 1. La plage s'élargit si tu joues plus doux ou plus fort.
-const pct = (xs, q) => { const a = [...xs].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.max(0, Math.round(q * (a.length - 1))))]; };
-function calVel(x, record) {
-  const c = S.cal, sg = c.hi >= c.lo ? 1 : -1, v = sg * x;
-  const hist = (S.velHist || []).concat(c.samples || [c.lo, c.hi]).map(z => sg * z);
-  // Les coups d'étalonnage sont souvent plus sages que le jeu : une marge au-delà, pour ne pas plafonner tout de suite.
-  const span = Math.abs(c.hi - c.lo);
-  let lo = Math.min(pct(hist, 0.04), sg * c.lo - 0.2 * span), hi = Math.max(pct(hist, 0.96), sg * c.hi + 0.35 * span);
-  if (hi - lo < 1e-6) hi = lo + 1;
-  if (record) { S.velHist = (S.velHist || []).concat([x]).slice(-80); clearTimeout(calVel.t); calVel.t = setTimeout(save, 2000); }
-  const k = Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
-  return 0.12 + 0.88 * k;
+// La force : la courbe de l'étalonnage (la valeur du capteur pour chacune des 5 nuances, pp à ff), suivie point par point,
+// prolongée au-delà de pp et de ff. Les nuances douces et fortes ne sont pas réparties pareil sur le capteur : une courbe
+// suit ton toucher là où une simple proportion écraserait le doux.
+function calPts(c) { return c.pts || [[c.lo, 0.25], [c.hi, 1]]; }
+function calVel(x) {
+  const c = S.cal, sg = c.sg || (c.hi >= c.lo ? 1 : -1), v = sg * x;
+  const pts = calPts(c).map(([px, pv]) => [sg * px, pv]);
+  let i = 0; while (i < pts.length - 2 && v > pts[i + 1][0]) i++;
+  const [x0, v0] = pts[i], [x1, v1] = pts[i + 1];
+  const r = x1 > x0 ? v0 + (v - x0) * (v1 - v0) / (x1 - x0) : v0;
+  return Math.min(1, Math.max(0.06, r));
 }
 const FEATNAME = { s: "secousse", c: "taille du doigt", p: "pression" };
 function measureHit(t0, e, apply) {
@@ -583,57 +581,78 @@ function measureHit(t0, e, apply) {
   if (S.touchMode !== "frappe") { log(null); return; }
   const c = S.cal;
   if (!c) { showInfo("touche « Étalonner » pour que la force suive ta frappe"); log(null); return; }
-  if (c.f !== "s") { const v = e.__vel != null ? e.__vel : calVel(f[c.f], true); showInfo(`vél. ${Math.round(v * 127)} · ${FEATNAME[c.f]}`); log(v); return; }
-  setTimeout(() => { const v = calVel(shockOf(t0, c.delay).amp, true); apply(v); showInfo(`vél. ${Math.round(v * 127)} · secousse`); log(v); }, c.delay);
+  if (c.f !== "s") { const v = e.__vel != null ? e.__vel : calVel(f[c.f]); showInfo(`vél. ${Math.round(v * 127)} · ${FEATNAME[c.f]}`); log(v); return; }
+  setTimeout(() => { const v = calVel(shockOf(t0, c.delay).amp); apply(v); showInfo(`vél. ${Math.round(v * 127)} · secousse`); log(v); }, c.delay);
 }
-// L'étalonnage : un grand pavé, 5 coups doux puis 5 coups forts.
+// L'étalonnage : un grand pavé, 5 nuances de pianissimo à fortissimo, 4 coups chacune.
+// Chaque coup sonne à la force visée, pour qu'on entende la nuance demandée.
+const NUANCES = [["pp", "pianissimo", "à peine effleurer", 0.14], ["p", "piano", "doucement", 0.35], ["mf", "mezzo-forte", "normalement", 0.58],
+  ["f", "forte", "fort", 0.8], ["ff", "fortissimo", "le plus fort possible", 1]];
+const PER = 4;
 let calib = null;
 function startCal() {
-  audio(); calib = { soft: [], hard: [] };
+  audio(); calib = NUANCES.map(() => []);
   $("calBox").style.display = "flex"; calStep();
 }
+const calLevel = () => calib.findIndex(l => l.length < PER);
 function calStep() {
-  const n = calib.soft.length < 5 ? calib.soft.length : calib.hard.length, soft = calib.soft.length < 5;
-  $("calMsg").innerHTML = soft ? `Tape <b>DOUCEMENT</b>, comme tu jouerais pianissimo<br>${n} / 5` : `Maintenant tape <b>FORT</b>, comme un fortissimo<br>${n} / 5`;
-  $("calPad").style.background = soft ? "rgba(74,144,217,.35)" : "rgba(217,74,74,.45)";
+  const k = calLevel(), [sym, name, how] = NUANCES[k];
+  $("calMsg").innerHTML = `<b style="font-size:22px">${sym}</b> ${name} — tape <b>${how}</b><br><span class="lbl">nuance ${k + 1} / 5 · coup ${calib[k].length + 1} / ${PER}</span>`;
+  $("calPad").style.background = `rgba(${Math.round(74 + 143 * k / 4)},${Math.round(144 - 70 * k / 4)},${Math.round(217 - 143 * k / 4)},${0.25 + 0.06 * k})`;
 }
 $("calPad").addEventListener("pointerdown", e => {
   e.preventDefault(); if (!calib) return;
-  const t0 = performance.now(), f = feat(e), list = calib.soft.length < 5 ? calib.soft : calib.hard;
-  const v = play(60 + S.root, 0.6, S.tSolo, busSolo); setTimeout(() => v.stop(), 250);
+  const k = calLevel(); if (k < 0) return;
+  const t0 = performance.now(), f = feat(e);
+  const v = play(60 + S.root, NUANCES[k][3], S.tSolo, busSolo); setTimeout(() => v.stop(), 300);
+  calib[k].push(null);   // compté tout de suite : on peut enchaîner les coups
+  const slot = calib[k].length - 1;
   setTimeout(() => {
+    if (!calib) return;
     const sh = shockOf(t0, 200);
-    list.push({ s: sh.amp, at: sh.at, c: f.c, p: f.p });
-    report({ cal: list === calib.soft ? "doux" : "fort", s: +sh.amp.toFixed(3), at: Math.round(sh.at), c: f.c, p: +f.p.toFixed(3), mo: hasMotion() });
-    if (calib.hard.length < 5) return calStep();
-    finishCal();
+    calib[k][slot] = { s: sh.amp, at: sh.at, c: f.c, p: f.p };
+    report({ cal: NUANCES[k][0], s: +sh.amp.toFixed(3), at: Math.round(sh.at), c: f.c, p: +f.p.toFixed(3), mo: hasMotion() });
+    if (calib.every(l => l.length === PER && l.every(x => x))) finishCal();
   }, 220);
+  if (calLevel() >= 0) calStep(); else $("calMsg").innerHTML = "…";
 });
+const median = xs => { const a = [...xs].sort((x, y) => x - y), m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
 function finishCal() {
-  const { soft, hard } = calib; calib = null;
-  const st = (l, k) => { const xs = l.map(x => x[k]); const m = xs.reduce((a, b) => a + b, 0) / xs.length; return { m, v: xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length }; };
+  const lv = calib; calib = null;
+  const all = lv.flatMap((l, k) => l.map(x => Object.assign({ k }, x)));
+  // Le capteur qui suit le mieux les nuances : la plus forte corrélation (de rang) entre la nuance et la mesure.
+  const rank = xs => { const o = xs.map((x, i) => [x, i]).sort((a, b) => a[0] - b[0]), r = []; o.forEach(([, i], j) => r[i] = j); return r; };
+  const corr = (a, b) => { const n = a.length, ma = a.reduce((x, y) => x + y) / n, mb = b.reduce((x, y) => x + y) / n;
+    let sab = 0, saa = 0, sbb = 0; for (let i = 0; i < n; i++) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) ** 2; sbb += (b[i] - mb) ** 2; }
+    return saa && sbb ? sab / Math.sqrt(saa * sbb) : 0; };
   let best = null;
-  for (const k of ["s", "c", "p"]) {
-    if (k === "s" && !soft.concat(hard).some(x => x.s > 0)) continue;
-    const a = st(soft, k), b = st(hard, k);
-    const d = Math.abs(b.m - a.m) / Math.sqrt((a.v + b.v) / 2 + 1e-9);
-    if (Math.abs(b.m - a.m) < 1e-6) continue;
-    if (!best || d > best.d) best = { f: k, d, lo: a.m, hi: b.m };
+  for (const f of ["s", "c", "p"]) {
+    const xs = all.map(x => x[f]); if (Math.max(...xs) - Math.min(...xs) < 1e-6) continue;
+    const r = corr(rank(all.map(x => x.k + Math.random() * 1e-6)), rank(xs.map(x => x + Math.random() * 1e-9)));
+    if (!best || Math.abs(r) > Math.abs(best.r)) best = { f, r };
   }
-  if (best && best.d >= 0.8) {
-    S.velHist = [];
-    S.cal = { f: best.f, lo: best.lo, hi: best.hi, d: +best.d.toFixed(2), samples: soft.concat(hard).map(x => x[best.f]),
-      delay: best.f === "s" ? Math.min(120, Math.max(30, Math.max(...hard.map(x => x.at)) + 12)) : 0 };
-    $("calMsg").innerHTML = `C'est réglé : la force suit <b>${FEATNAME[best.f]}</b>${best.lo > best.hi ? " (en sens inverse sur ton téléphone)" : ""}.<br>Netteté ${best.d.toFixed(1)}`;
+  if (best && Math.abs(best.r) >= 0.6) {
+    const sg = best.r > 0 ? 1 : -1;
+    // La courbe : la médiane de chaque nuance, rendue croissante (deux nuances confondues se partagent un point).
+    let pts = lv.map((l, k) => [sg * median(l.map(x => x[best.f])), NUANCES[k][3]]);
+    for (let i = 1; i < pts.length; i++) if (pts[i][0] <= pts[i - 1][0]) { const m = (pts[i][1] + pts[i - 1][1]) / 2; pts[i - 1] = [pts[i - 1][0], m]; pts[i] = [pts[i - 1][0] + 1e-6, m]; }
+    // Prolongée : sous pp jusqu'au silence presque, au-delà de ff le plafond.
+    const lo = pts[0][0] - (pts[1][0] - pts[0][0]), hi = pts[4][0] + (pts[4][0] - pts[3][0]);
+    pts = [[lo, 0.06], ...pts, [hi, 1]];
+    S.cal = { f: best.f, sg, r: +best.r.toFixed(2), pts: pts.map(([x, v]) => [+(sg * x).toFixed(4), v]),
+      delay: best.f === "s" ? Math.min(120, Math.max(30, Math.max(...lv[4].map(x => x.at)) + 12)) : 0 };
+    delete S.velHist;
+    const q = Math.abs(best.r) > 0.9 ? "très nette" : Math.abs(best.r) > 0.75 ? "nette" : "moyenne";
+    $("calMsg").innerHTML = `C'est réglé : la force suit <b>${FEATNAME[best.f]}</b>${sg < 0 ? " (en sens inverse sur ton téléphone)" : ""}.<br><span class="lbl">Distinction des 5 nuances : ${q} (${Math.abs(best.r).toFixed(2)})</span>`;
     showInfo(`étalonné : ${FEATNAME[best.f]}`);
   } else {
     S.cal = null; S.touchMode = "pos";
-    $("calMsg").innerHTML = `Ton téléphone ne fait pas la différence entre un coup doux et un coup fort.<br>Je passe en « Position ↓ » : bas de la touche = fort.`;
+    $("calMsg").innerHTML = `Ton téléphone ne fait pas la différence entre les nuances.<br>Je passe en « Position ↓ » : bas de la touche = fort.`;
   }
-  report({ calDone: S.cal, soft, hard });
+  report({ calDone: S.cal, levels: lv });
   $("calPad").style.background = "rgba(255,255,255,.08)";
   save(); render();
-  setTimeout(() => { $("calBox").style.display = "none"; }, 3500);
+  setTimeout(() => { $("calBox").style.display = "none"; }, 4000);
 }
 $("calBtn").onclick = startCal;
 $("calBox").addEventListener("click", e => { if (e.target.id === "calClose") { calib = null; $("calBox").style.display = "none"; } });
