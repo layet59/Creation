@@ -544,7 +544,7 @@ function posVel(el, y) { const r = el.getBoundingClientRect(); return 0.15 + 0.8
 function touchVel(el, y, e) {
   if (S.touchMode === "fixe") return 0.8;
   if (S.touchMode === "pos") return posVel(el, y);
-  if (e && S.cal && S.cal.f !== "s") return calVel(feat(e)[S.cal.f]);
+  if (e && S.cal && S.cal.f !== "s") return calVel(feat(e)[S.cal.f], false);
   return 0.6;
 }
 // L'accéléromètre : l'intensité de chaque secousse, gardée 600 ms.
@@ -573,26 +573,44 @@ let logN = 0;
 function report(o) { logN++; try { document.title = "vel|" + logN + "|" + JSON.stringify(o); } catch (e) {} }
 let lastInfo = "";
 const showInfo = t => { lastInfo = t; const vi = $("velInfo"); if (vi) vi.textContent = t; };
-// La force : la courbe de l'étalonnage (la valeur du capteur pour chacune des 5 nuances, pp à ff), suivie point par point,
-// prolongée au-delà de pp et de ff. Les nuances douces et fortes ne sont pas réparties pareil sur le capteur : une courbe
-// suit ton toucher là où une simple proportion écraserait le doux.
-function calPts(c) { return c.pts || [[c.lo, 0.25], [c.hi, 1]]; }
-function calVel(x) {
-  const c = S.cal, sg = c.sg || (c.hi >= c.lo ? 1 : -1), v = sg * x;
-  const pts = calPts(c).map(([px, pv]) => [sg * px, pv]);
-  let i = 0; while (i < pts.length - 2 && v > pts[i + 1][0]) i++;
-  const [x0, v0] = pts[i], [x1, v1] = pts[i + 1];
-  const r = x1 > x0 ? v0 + (v - x0) * (v1 - v0) / (x1 - x0) : v0;
-  return Math.min(1, Math.max(0.06, r));
+// La force : la pression (ou la taille du doigt) se lit en échelle logarithmique, comme l'oreille entend :
+// passer de 2 à 4 compte autant que de 4 à 8. Elle est placée entre tes coups les plus doux et les plus forts
+// (5 % et 95 % des 150 derniers coups, plus ceux de l'étalonnage), pour couvrir tout ton jeu sans plafonner.
+const pct = (xs, q) => { const a = [...xs].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.max(0, Math.round(q * (a.length - 1))))]; };
+const calSamples = c => c.samples || (c.pts ? c.pts.map(p => p[0]) : [c.lo, c.hi]);
+const tr = (f, x) => f === "s" ? x : Math.log(Math.max(x, 0.01));
+function calVel(x, record) {
+  const c = S.cal, sg = c.sg || (c.hi >= c.lo ? 1 : -1);
+  const hist = (S.velHist || []).concat(calSamples(c)).map(z => sg * tr(c.f, z));
+  let lo = pct(hist, 0.05), hi = pct(hist, 0.95);
+  const minSpan = c.f === "s" ? 0.3 : 0.7;
+  if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  if (record) { S.velHist = (S.velHist || []).concat([x]).slice(-150); clearTimeout(calVel.t); calVel.t = setTimeout(save, 2000); }
+  const k = Math.min(1, Math.max(0, (sg * tr(c.f, x) - lo) / (hi - lo)));
+  return 0.1 + 0.9 * k;
 }
+// La pression monte pendant les premières millisecondes du toucher : on garde la plus forte des 30 premières ms.
+const PEAK_MS = 30;
+const peaks = new Map();   // pointerId -> {max, t0}
+document.addEventListener("pointermove", e => { const k = peaks.get(e.pointerId); if (k && S.cal) k.max = Math.max(k.max, feat(e)[S.cal.f] * (S.cal.sg || 1)) ; }, true);
 const FEATNAME = { s: "secousse", c: "taille du doigt", p: "pression" };
 function measureHit(t0, e, apply) {
   const f = feat(e);
-  const log = v => setTimeout(() => { const sh = shockOf(t0, 200); report({ m: S.touchMode, cal: S.cal ? S.cal.f : "-", s: +sh.amp.toFixed(3), at: Math.round(sh.at), c: f.c, p: +f.p.toFixed(3), v: v == null ? null : Math.round(v * 127), mo: hasMotion() }); }, 220);
+  const log = v => setTimeout(() => { const sh = shockOf(t0, 200); report({ m: S.touchMode, cal: S.cal ? S.cal.f : "-", pk: f.pk == null ? null : +f.pk.toFixed(3), s: +sh.amp.toFixed(3), at: Math.round(sh.at), c: f.c, p: +f.p.toFixed(3), v: v == null ? null : Math.round(v * 127), mo: hasMotion() }); }, 220);
   if (S.touchMode !== "frappe") { log(null); return; }
   const c = S.cal;
   if (!c) { showInfo("touche « Étalonner » pour que la force suive ta frappe"); log(null); return; }
-  if (c.f !== "s") { const v = e.__vel != null ? e.__vel : calVel(f[c.f]); showInfo(`vél. ${Math.round(v * 127)} · ${FEATNAME[c.f]}`); log(v); return; }
+  if (c.f !== "s") {
+    const sg = c.sg || 1, k = { max: sg * f[c.f] }; peaks.set(e.pointerId, k);
+    setTimeout(() => {
+      peaks.delete(e.pointerId);
+      const x = sg * k.max, v = calVel(x, true);
+      const v0 = e.__vel != null ? e.__vel : v;
+      if (Math.abs(v - v0) > 0.02) apply(v);
+      showInfo(`vél. ${Math.round(v * 127)} · ${FEATNAME[c.f]}`); f.pk = x; log(v);
+    }, PEAK_MS);
+    return;
+  }
   setTimeout(() => { const v = calVel(shockOf(t0, c.delay).amp); apply(v); showInfo(`vél. ${Math.round(v * 127)} · secousse`); log(v); }, c.delay);
 }
 // L'étalonnage : un grand pavé, 5 nuances de pianissimo à fortissimo, 4 coups chacune.
@@ -615,13 +633,15 @@ $("calPad").addEventListener("pointerdown", e => {
   e.preventDefault(); if (!calib) return;
   const k = calLevel(); if (k < 0) return;
   const t0 = performance.now(), f = feat(e);
+  const pk = { c: f.c, p: f.p }; const mv = m => { if (m.pointerId === e.pointerId) { const g = feat(m); pk.c = Math.max(pk.c, g.c); pk.p = Math.max(pk.p, g.p); } };
+  document.addEventListener("pointermove", mv, true); setTimeout(() => document.removeEventListener("pointermove", mv, true), PEAK_MS);
   const v = play(60 + S.root, NUANCES[k][3], S.tSolo, busSolo); setTimeout(() => v.stop(), 300);
   calib[k].push(null);   // compté tout de suite : on peut enchaîner les coups
   const slot = calib[k].length - 1;
   setTimeout(() => {
     if (!calib) return;
     const sh = shockOf(t0, 200);
-    calib[k][slot] = { s: sh.amp, at: sh.at, c: f.c, p: f.p };
+    calib[k][slot] = { s: sh.amp, at: sh.at, c: pk.c, p: pk.p };
     report({ cal: NUANCES[k][0], s: +sh.amp.toFixed(3), at: Math.round(sh.at), c: f.c, p: +f.p.toFixed(3), mo: hasMotion() });
     if (calib.every(l => l.length === PER && l.every(x => x))) finishCal();
   }, 220);
@@ -650,9 +670,9 @@ function finishCal() {
     // Prolongée : sous pp jusqu'au silence presque, au-delà de ff le plafond.
     const lo = pts[0][0] - (pts[1][0] - pts[0][0]), hi = pts[4][0] + (pts[4][0] - pts[3][0]);
     pts = [[lo, 0.06], ...pts, [hi, 1]];
-    S.cal = { f: best.f, sg, r: +best.r.toFixed(2), pts: pts.map(([x, v]) => [+(sg * x).toFixed(4), v]),
+    S.cal = { f: best.f, sg, r: +best.r.toFixed(2), samples: all.map(x => x[best.f]),
       delay: best.f === "s" ? Math.min(120, Math.max(30, Math.max(...lv[4].map(x => x.at)) + 12)) : 0 };
-    delete S.velHist;
+    S.velHist = [];
     const q = Math.abs(best.r) > 0.9 ? "très nette" : Math.abs(best.r) > 0.75 ? "nette" : "moyenne";
     $("calMsg").innerHTML = `C'est réglé : la force suit <b>${FEATNAME[best.f]}</b>${sg < 0 ? " (en sens inverse sur ton téléphone)" : ""}.<br><span class="lbl">Distinction des 5 nuances : ${q} (${Math.abs(best.r).toFixed(2)})</span>`;
     showInfo(`étalonné : ${FEATNAME[best.f]}`);
@@ -684,6 +704,15 @@ function fingerTo(id, el, y, e) {
   lightPads();
 }
 const padsEl = $("pads");
+// Un doigt posé alors qu'aucun autre ne l'est (isPrimary) : toute note encore tenue est orpheline (son « lever »
+// s'est perdu, par exemple quand le launcher a repris le toucher) et s'arrête.
+function clearStale(e) {
+  if (!e.isPrimary) return;
+  if (fingers.size) { fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); }
+  if (chordPointer !== null && !S.hold) { chordPointer = null; stopChord(); }
+}
+document.addEventListener("pointerdown", clearStale, true);
+window.addEventListener("blur", () => { fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); if (!S.hold) { chordPointer = null; stopChord(); } });
 padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY, e); });
 document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY); });
 const lift = e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, null, 0); };
