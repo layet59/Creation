@@ -40,7 +40,7 @@
   .c.nx { border:2px solid rgba(245,179,66,.9); }
   input[type=range] { flex:1; accent-color:var(--accent); }
   .lbl { font-size:11px; color:var(--muted); }
-  .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:60px; z-index:5; }
+  .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:110px; z-index:5; }
   .over .box, #over .box { background:var(--card); border-radius:16px; padding:14px; width:calc(100% - 40px); display:flex; flex-direction:column; gap:8px; }
   #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
   #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
@@ -92,9 +92,11 @@
   <div class="lbl">Tonalité</div><div class="chips" id="keys"></div>
   <div class="lbl">Mode</div><div class="chips" id="modes"></div>
 </div></div>
-<div id="sounds" class="over"><div class="box" style="max-height:80vh;overflow-y:auto;touch-action:pan-y">
-  <div class="row"><b id="soundTitle" class="grow"></b><button class="pill on" id="soundOk">OK</button></div>
+<div id="sounds" class="over" style="padding-top:110px"><div class="box" style="max-height:calc(100vh - 130px);overflow-y:auto;touch-action:pan-y;padding-top:0">
+  <!-- Le titre et OK restent visibles en haut quand on fait défiler la liste ; un second bouton ferme en bas. -->
+  <div class="row" style="position:sticky;top:0;background:var(--card);padding:12px 0 8px;z-index:1"><b id="soundTitle" class="grow"></b><button class="pill on" id="soundOk" style="padding:9px 18px">OK</button></div>
   <div id="soundList" style="display:flex;flex-direction:column;gap:6px"></div>
+  <button class="pill on" id="soundOk2" style="position:sticky;bottom:0;margin-top:8px;padding:12px;font-size:15px">Fermer</button>
 </div></div>
 <div id="calBox" class="over" style="flex-direction:column;align-items:stretch;padding:110px 20px 20px;gap:14px">
   <div class="row"><div id="calMsg" class="grow" style="font:600 16px system-ui;line-height:1.4"></div><button class="pill" id="calClose">✕</button></div>
@@ -789,7 +791,7 @@ $("sounds").addEventListener("click", e => {
     if (id.startsWith("gm:")) { const I = SF[sfKey(S.bank, id.slice(3))]; if (I && I.state === "load") { const w = setInterval(() => { if (I.state !== "load") { clearInterval(w); if (I.state === "ok") setTimeout(go, 400); } }, 200); } }
     const sc = $("sounds").firstElementChild.scrollTop; openSounds(soundFor); $("sounds").firstElementChild.scrollTop = sc; render(); return;
   }
-  if (e.target === $("sounds") || e.target.id === "soundOk") $("sounds").style.display = "none";
+  if (e.target === $("sounds") || e.target.id === "soundOk" || e.target.id === "soundOk2") $("sounds").style.display = "none";
 });
 $("touch").onclick = () => { S.touchMode = { frappe: "pos", pos: "fixe", fixe: "frappe" }[S.touchMode]; lastInfo = ""; save(); render(); };
 // Octave des accords : −2 à +2 ; un accord qui sonne encore est rejoué à la nouvelle hauteur.
