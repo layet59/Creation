@@ -43,6 +43,8 @@
   .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:60px; z-index:5; }
   .over .box, #over .box { background:var(--card); border-radius:16px; padding:14px; width:calc(100% - 40px); display:flex; flex-direction:column; gap:8px; }
   #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
+  #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
+  .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
 </style>
 </head>
 <body>
@@ -76,6 +78,7 @@
     <div class="chords" id="chords"></div>
   </div>
   <div class="row">
+    <button class="pill" id="touch"></button>
     <span class="lbl">Accords</span><input type="range" id="vPad" min="0" max="100">
     <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="100">
     <span class="lbl">Réverb</span><input type="range" id="vRev" min="0" max="100">
@@ -159,8 +162,8 @@ function audio() {
   ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
   const comp = ac.createDynamicsCompressor();
   // Compresseur en douceur, puis un niveau général sous 0 dB : rien ne sature, même un accord de 13e à 8 notes.
-  comp.threshold.value = -20; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.25;
-  master = ac.createGain(); master.gain.value = 0.7;
+  comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.25;
+  master = ac.createGain(); master.gain.value = 0.85;
   busPad = ac.createGain(); busSolo = ac.createGain();
   busPad.connect(master); busSolo.connect(master); master.connect(comp); comp.connect(ac.destination);
   // Réverbération de salle : une réponse impulsionnelle stéréo calculée (bruit qui décroît en 2,4 s, plus sombre à la fin),
@@ -258,7 +261,7 @@ function voice(n, vel, id, bus) {
     lfo.connect(lg); lg.connect(tg.gain); out.disconnect(); out.connect(tg); tg.connect(bus); nodes.push(lfo);
   }
   const [a, d, sus, rel] = P.amp;
-  const peak = vel * P.lvl;
+  const peak = Math.pow(vel, 1.5) * P.lvl;
   out.gain.setValueAtTime(0, t0);
   out.gain.linearRampToValueAtTime(peak, t0 + a);
   out.gain.setTargetAtTime(Math.max(peak * sus, 0.0001), t0 + a, d / 3);
@@ -399,8 +402,8 @@ function sampleVoice(n, vel, name, bus) {
   const s = ac.createBufferSource(); s.buffer = src.b; s.playbackRate.value = rate;
   if (src.le) { s.loop = true; s.loopStart = src.ls; s.loopEnd = src.le; }
   // Le toucher : plus fort et un peu plus brillant quand on frappe fort.
-  const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2500 + 15000 * vel * vel; lp.Q.value = 0.5;
-  const out = ac.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel * 0.9, t0 + 0.004);
+  const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 900 + 16000 * vel * vel; lp.Q.value = 0.5;
+  const out = ac.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(Math.pow(vel, 1.5) * 0.9, t0 + 0.004);
   const pan = ac.createStereoPanner ? ac.createStereoPanner() : null;
   s.connect(lp); lp.connect(out);
   if (pan) { pan.pan.value = Math.max(-0.5, Math.min(0.5, (n - 64) / 40)); out.connect(pan); pan.connect(bus); } else out.connect(bus);
@@ -428,7 +431,7 @@ function sfStatus(id) {
 }
 let renderSoundState = () => {};
 let chordVoices = [];
-function playChord(c) {
+function playChord(c, cv = 0.85) {
   audio();
   chordVoices.forEach(v => v.stop());
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
@@ -436,7 +439,7 @@ function playChord(c) {
   const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
   // Plus l'accord a de notes, plus chacune est douce : un accord de 8 notes sonne aussi fort qu'une triade, sans saturer.
   const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
-  chordVoices = notes.map((n, i) => play(n, (i === 0 ? 0.7 : 0.85) * per, S.tPad, busPad));
+  chordVoices = notes.map((n, i) => play(n, (i === 0 ? 0.82 : 1) * cv * per, S.tPad, busPad));
 }
 function stopChord() { chordVoices.forEach(v => v.stop()); chordVoices = []; }
 
@@ -451,6 +454,7 @@ function render() {
   $("tSolo").textContent = soundName(S.tSolo) + sfStatus(S.tSolo); $("tPad").textContent = soundName(S.tPad) + sfStatus(S.tPad);
   $("hold").textContent = S.hold ? "Tenu" : "Au doigt"; $("hold").classList.toggle("on", S.hold);
   $("octLbl").textContent = `oct. ${S.oct > 0 ? "+" : ""}${S.oct}`;
+  $("touch").textContent = S.fixe ? "Force fixe" : "Toucher ↓"; $("touch").classList.toggle("on", !S.fixe);
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev;
   // gamme
   const cands = scaleCands();
@@ -499,10 +503,19 @@ function render() {
 // ------------------------------------------------------------------ jeu : un doigt = une note, glisser change de note
 const fingers = new Map();   // pointerId -> {n, v}
 function lightPads() {
-  const held = new Set([...fingers.values()].map(f => f.n));
-  document.querySelectorAll(".p").forEach(el => el.classList.toggle("down", held.has(+el.dataset.n)));
+  const held = new Map([...fingers.values()].map(f => [f.n, f.vel]));
+  // La force jouée : une jauge blanche qui monte du bas de la touche.
+  document.querySelectorAll(".p").forEach(el => { const v = held.get(+el.dataset.n); el.classList.toggle("down", v != null);
+    el.style.boxShadow = v != null ? `inset 0 -${Math.round(v * el.clientHeight)}px 0 rgba(255,255,255,.28)` : ""; });
 }
 function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest(".p"); }
+// Le toucher : plus on appuie bas sur la touche, plus c'est fort (≈ 25 dB d'écart, et plus brillant).
+// « Fixe » : toujours la même force.
+function touchVel(el, y) {
+  if (S.fixe) return 0.8;
+  const r = el.getBoundingClientRect();
+  return 0.15 + 0.85 * Math.min(1, Math.max(0, (y - r.top) / r.height));
+}
 function fingerTo(id, el, y) {
   const f = fingers.get(id);
   const n = el ? +el.dataset.n : null;
@@ -510,9 +523,8 @@ function fingerTo(id, el, y) {
   if (f) { f.v.stop(); fingers.delete(id); }
   if (n !== null) {
     audio();
-    const r = el.getBoundingClientRect();
-    const vel = 0.55 + 0.45 * Math.min(1, Math.max(0, (y - r.top) / r.height));
-    fingers.set(id, { n, v: play(n, vel, S.tSolo, busSolo) });
+    const vel = touchVel(el, y);
+    fingers.set(id, { n, vel, el, v: play(n, vel, S.tSolo, busSolo) });
   }
   lightPads();
 }
@@ -535,7 +547,7 @@ $("chords").addEventListener("pointerdown", e => {
   chordPointer = e.pointerId;
   const c = chords()[+el.dataset.c];
   cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; selS = null;
-  playChord(c); render();
+  playChord(c, touchVel(el, e.clientY)); render();
 });
 // une couleur : même mécanique (au doigt ou tenue)
 $("vars").addEventListener("pointerdown", e => {
@@ -588,6 +600,7 @@ $("sounds").addEventListener("click", e => {
   }
   if (e.target === $("sounds") || e.target.id === "soundOk") $("sounds").style.display = "none";
 });
+$("touch").onclick = () => { S.fixe = !S.fixe; save(); render(); };
 $("octDn").onclick = () => { S.oct = Math.max(-2, S.oct - 1); save(); render(); };
 $("octUp").onclick = () => { S.oct = Math.min(1, S.oct + 1); save(); render(); };
 $("vPad").oninput = e => { S.vPad = +e.target.value; mix(); save(); };
