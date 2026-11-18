@@ -26,15 +26,14 @@
   .title { font:600 13px system-ui; color:var(--fg); opacity:.9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chips { display:flex; gap:5px; flex-wrap:wrap; }
   .chips .pill { font-size:12px; padding:6px 10px; }
-  /* Le solo se joue téléphone tourné d'un quart de tour (sens des aiguilles d'une montre) : main gauche sur les accords,
-     main droite sur le solo. En portrait, chaque touche est donc une barre couchée sur toute la largeur, la plus grave
-     en bas (à gauche, téléphone tourné) et la plus aiguë en haut (à droite). Le nom est écrit de côté (−90°) pour se lire
-     à l'endroit une fois le téléphone tourné, près du bord gauche (le haut de la touche, téléphone tourné). */
-  #pads { flex:1; display:flex; flex-direction:column-reverse; gap:3px; min-height:0; }
+  /* Le solo : une rangée de touches hautes et étroites tout en haut, la plus grave à gauche. Téléphone tourné d'un quart
+     de tour (sens des aiguilles d'une montre, main gauche sur les accords), elles deviennent des barres couchées, la plus
+     grave en haut et la plus aiguë en bas : un clavier d'accordéon. Les noms s'écrivent de côté pour se lire ainsi. */
+  #pads { flex:1; display:flex; flex-direction:row; gap:3px; min-height:0; }
   .prow { display:contents; }
-  .p { flex:1; min-width:0; min-height:0; border-radius:7px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:row; align-items:center; justify-content:flex-start; padding-left:6px; gap:2px; transition:filter .05s; }
-  .p b, .p i { display:block; transform:rotate(-90deg); white-space:nowrap; }
-  .p b { font-size:12px !important; width:22px; text-align:center; } .p i { font-size:9px !important; width:14px; text-align:center; }
+  .p { flex:1; min-width:0; min-height:0; border-radius:7px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:6px; gap:2px; transition:filter .05s; }
+  .p b, .p i { writing-mode:vertical-rl; transform:rotate(180deg); white-space:nowrap; }
+  .p b { font-size:13px !important; } .p i { font-size:10px !important; }
   .p b { font-size:14px; } .p i { font-style:normal; font-size:11px; opacity:.65; font-weight:600; }
   .p.ch { background:var(--gold); } .p.av { background:#a94a4d; color:#fff; } .p.down { background:var(--accent); color:#fff; }
   .chords { display:grid; grid-template-columns:repeat(12,1fr); gap:6px; }
@@ -52,7 +51,7 @@
   #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
   /* Les noms de son longs se raccourcissent (…) au lieu de pousser ⏹ hors du cadre. */
   #tSolo, #tPad { min-width:0; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
-  #pads .p { background-image:linear-gradient(to right, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
+  #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
   .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
 </style>
 </head>
@@ -753,7 +752,7 @@ function lightPads() {
   const held = new Map([...fingers.values()].map(f => [f.n, f.vel]));
   // La force jouée : une jauge blanche qui monte du bas de la touche.
   document.querySelectorAll(".p").forEach(el => { const v = held.get(+el.dataset.n); el.classList.toggle("down", v != null);
-    el.style.boxShadow = v != null ? `inset -${Math.round(v * el.clientWidth)}px 0 0 rgba(255,255,255,.28)` : ""; });
+    el.style.boxShadow = v != null ? `inset 0 -${Math.round(v * el.clientHeight)}px 0 rgba(255,255,255,.28)` : ""; });
 }
 function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest(".p"); }
 // Le toucher. « Frappe » (par défaut) : la force du coup, apprise sur le téléphone par un étalonnage
@@ -762,8 +761,7 @@ function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && 
 // « Fixe » : toujours la même force.
 function posVel(el, y, x) {
   const r = el.getBoundingClientRect();
-  // Touche du solo (barre couchée) : plus près du bord droit (le bas de la touche, téléphone tourné) = plus fort.
-  const k = el.classList.contains("p") && x != null ? (x - r.left) / r.width : (y - r.top) / r.height;
+  const k = (y - r.top) / r.height;
   return 0.15 + 0.85 * Math.min(1, Math.max(0, k));
 }
 // Avec la pression ou la taille du doigt, la force est connue dès le toucher : la note part directement
