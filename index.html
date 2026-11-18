@@ -938,9 +938,22 @@ function clearStale(e) {
 }
 document.addEventListener("pointerdown", clearStale, true);
 window.addEventListener("blur", () => { fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); if (!S.hold) { chordPointer = null; stopChord(); } });
-padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY, e); });
-document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY); });
-const lift = e => { if (fingers.has(e.pointerId)) fingerTo(e.pointerId, null, 0); };
+padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY, e);
+  const f = fingers.get(e.pointerId); if (f) glideLog.set(e.pointerId, { notes: [f.n], moves: 0, t0: performance.now() }); });
+document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) {
+  const g = glideLog.get(e.pointerId); if (g) g.moves++;
+  fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY);
+  const f = fingers.get(e.pointerId); if (g && f && g.notes[g.notes.length - 1] !== f.n) g.notes.push(f.n);
+} });
+// Journal du glissé (pour comprendre ce que fait le téléphone) : notes traversées, et doigt repris (pointercancel).
+const glideLog = new Map();
+const lift = e => {
+  if (fingers.has(e.pointerId)) {
+    const g = glideLog.get(e.pointerId); glideLog.delete(e.pointerId);
+    if (g) report({ glide: g.notes, moves: g.moves, fin: e.type, ms: Math.round(performance.now() - g.t0) });
+    fingerTo(e.pointerId, null, 0);
+  }
+};
 document.addEventListener("pointerup", lift);
 document.addEventListener("pointercancel", lift);
 document.addEventListener("contextmenu", e => e.preventDefault());
