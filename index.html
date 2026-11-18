@@ -73,7 +73,10 @@
       <button class="pill" id="tPad"></button>
       <button class="pill" id="stop">⏹</button>
     </div>
-    <div class="row" id="tabs"></div>
+    <div class="row"><span class="row grow" id="tabs"></span>
+      <button class="pill" id="octPadDn">−</button>
+      <span class="lbl" id="octPadLbl"></span>
+      <button class="pill" id="octPadUp">+</button></div>
     <div class="scroller vars" id="vars"></div>
     <div class="chords" id="chords"></div>
   </div>
@@ -459,7 +462,7 @@ function playChord(c, cv = 0.85) {
   audio();
   chordVoices.forEach(v => v.stop());
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
-  const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0);
+  const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0) + 12 * (S.octPad || 0);
   const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
   // Plus l'accord a de notes, plus chacune est douce : un accord de 8 notes sonne aussi fort qu'une triade, sans saturer.
   const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
@@ -478,6 +481,7 @@ function render() {
   $("tSolo").textContent = soundName(S.tSolo) + sfStatus(S.tSolo); $("tPad").textContent = soundName(S.tPad) + sfStatus(S.tPad);
   $("hold").textContent = S.hold ? "Tenu" : "Au doigt"; $("hold").classList.toggle("on", S.hold);
   $("octLbl").textContent = `oct. ${S.oct > 0 ? "+" : ""}${S.oct}`;
+  const op = S.octPad || 0; $("octPadLbl").textContent = `oct. ${op > 0 ? "+" : ""}${op}`;
   $("touch").textContent = { frappe: "Frappe", pos: "Position ↓", fixe: "Force fixe" }[S.touchMode]; $("touch").classList.toggle("on", S.touchMode !== "fixe");
   $("velInfo").textContent = S.touchMode === "frappe" ? (lastInfo || (S.cal ? `étalonné : ${FEATNAME[S.cal.f]}` : "touche « Étalonner »")) : S.touchMode === "pos" ? "bas de la touche = fort" : "";
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev; $("vMax").value = S.vMax;
@@ -788,6 +792,11 @@ $("sounds").addEventListener("click", e => {
   if (e.target === $("sounds") || e.target.id === "soundOk") $("sounds").style.display = "none";
 });
 $("touch").onclick = () => { S.touchMode = { frappe: "pos", pos: "fixe", fixe: "frappe" }[S.touchMode]; lastInfo = ""; save(); render(); };
+// Octave des accords : −2 à +2 ; un accord qui sonne encore est rejoué à la nouvelle hauteur.
+const octPad = d => { S.octPad = Math.max(-2, Math.min(2, (S.octPad || 0) + d)); save();
+  if (cur && chordVoices.length && (S.hold || chordPointer !== null)) playChord(cur); render(); };
+$("octPadDn").onclick = () => octPad(-1);
+$("octPadUp").onclick = () => octPad(1);
 $("octDn").onclick = () => { S.oct = Math.max(-2, S.oct - 1); save(); render(); };
 $("octUp").onclick = () => { S.oct = Math.min(1, S.oct + 1); save(); render(); };
 $("vMax").oninput = e => { S.vMax = +e.target.value; mix(); save(); };
