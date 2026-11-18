@@ -178,13 +178,15 @@ function audio() {
   master = ac.createGain(); master.gain.value = 0.85;
   busPad = ac.createGain(); busSolo = ac.createGain();
   busPad.connect(master); busSolo.connect(master); master.connect(comp);
-  // Volume général : un gain après le compresseur (jusqu'à ×4, +12 dB), puis un limiteur rapide et, tout au bout,
-  // un écrêtage doux qui n'agit que sur les crêtes au-dessus de 0,8 : fort sans saturer.
+  // Volume général : un gain après le compresseur (jusqu'à ×4, +12 dB), puis un limiteur (seuil −6 dB ; avec le gain de
+  // rattrapage automatique de Chrome, sa sortie plafonne vers −2 dB) et, tout au bout, un écrêtage doux qui ne touche
+  // que ce qui dépasserait 0,95 (rien d'habitude). Avant, l'écrêtage commençait à 0,8, sous la sortie du limiteur :
+  // tous les sons forts passaient dedans et saturaient.
   boost = ac.createGain();
   const lim = ac.createDynamicsCompressor();
-  lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.12;
+  lim.threshold.value = -6; lim.knee.value = 2; lim.ratio.value = 20; lim.attack.value = 0.003; lim.release.value = 0.25;
   const clip = ac.createWaveShaper(), N = 2048, cv = new Float32Array(N);
-  for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1, a = Math.abs(x); cv[i] = Math.sign(x) * (a < 0.8 ? a : 0.8 + 0.2 * Math.tanh((a - 0.8) / 0.2)); }
+  for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1, a = Math.abs(x); cv[i] = Math.sign(x) * (a < 0.95 ? a : 0.95 + 0.05 * Math.tanh((a - 0.95) / 0.05)); }
   clip.curve = cv; clip.oversample = "2x";
   comp.connect(boost); boost.connect(lim); lim.connect(clip); clip.connect(ac.destination);
   // Réverbération de salle : une réponse impulsionnelle stéréo calculée (bruit qui décroît en 2,4 s, plus sombre à la fin),
