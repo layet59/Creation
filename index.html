@@ -29,7 +29,7 @@
   /* Le solo : une rangée de touches hautes et étroites tout en haut, la plus grave à gauche. Téléphone tourné d'un quart
      de tour (sens des aiguilles d'une montre, main gauche sur les accords), elles deviennent des barres couchées, la plus
      grave en haut et la plus aiguë en bas : un clavier d'accordéon. Les noms s'écrivent de côté pour se lire ainsi. */
-  #pads { flex:1; display:flex; flex-direction:row; gap:3px; min-height:0; }
+  #pads { flex:1; display:flex; flex-direction:row-reverse; gap:3px; min-height:0; }   /* grave à droite : près de toi, téléphone tourné */
   .prow { display:contents; }
   .p { flex:1; min-width:0; min-height:0; border-radius:7px; background:var(--pad); color:#1c1c1e; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:6px; gap:2px; transition:filter .05s; }
   .p b, .p i { writing-mode:vertical-rl; transform:rotate(180deg); white-space:nowrap; }
@@ -44,12 +44,26 @@
   .c b.long { font-size:12px; }
   .c.on { background:rgba(74,144,217,.55); } .c.on small { color:#fff; }
   .c.nx { border:2px solid rgba(245,179,66,.9); }
-  input[type=range] { flex:1; accent-color:var(--accent); }
+  input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
   .lbl { font-size:11px; color:var(--muted); }
   .over, #over { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:24px; z-index:5; }
   .over .box, #over .box { background:var(--card); border-radius:16px; padding:14px; width:calc(100% - 40px); display:flex; flex-direction:column; gap:8px; }
   #start { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(13,20,32,.85); z-index:9; font:700 18px system-ui; }
   /* Les noms de son longs se raccourcissent (…) au lieu de pousser ⏹ hors du cadre. */
+  /* Écran plus large que haut (le téléphone s'est réorienté) : la page se met en position de jeu.
+     À gauche les accords et les réglages (main gauche), à droite le solo sur toute la hauteur, en barres couchées,
+     les aigus en haut et les graves en bas, les noms à l'endroit. */
+  @media (orientation: landscape) {
+    #app { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); grid-auto-rows:min-content; column-gap:10px; row-gap:8px; align-content:start; }
+    #app > .solo { grid-column:2; grid-row:1 / span 20; height:calc(100vh - 16px); }
+    #app > :not(.solo) { grid-column:1; }
+    #pads { flex-direction:column-reverse; }
+    #pads .p { flex-direction:row; justify-content:flex-start; padding:0 0 0 12px; gap:8px; background-image:linear-gradient(to right, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
+    .p b, .p i { writing-mode:horizontal-tb; transform:none; }
+    .p b { font-size:15px !important; } .p i { font-size:11px !important; }
+    .c { height:84px; }
+    .c b { font-size:19px; }
+  }
   #tSolo, #tPad { min-width:0; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
   #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
   .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
@@ -752,7 +766,9 @@ function lightPads() {
   const held = new Map([...fingers.values()].map(f => [f.n, f.vel]));
   // La force jouée : une jauge blanche qui monte du bas de la touche.
   document.querySelectorAll(".p").forEach(el => { const v = held.get(+el.dataset.n); el.classList.toggle("down", v != null);
-    el.style.boxShadow = v != null ? `inset 0 -${Math.round(v * el.clientHeight)}px 0 rgba(255,255,255,.28)` : ""; });
+    // Jauge du bas de la touche (debout) ou depuis la gauche (barre couchée, écran en largeur).
+    const wide = el.clientWidth > el.clientHeight;
+    el.style.boxShadow = v == null ? "" : wide ? `inset ${Math.round(v * el.clientWidth)}px 0 0 rgba(255,255,255,.28)` : `inset 0 -${Math.round(v * el.clientHeight)}px 0 rgba(255,255,255,.28)`; });
 }
 function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest(".p"); }
 // Le toucher. « Frappe » (par défaut) : la force du coup, apprise sur le téléphone par un étalonnage
@@ -761,7 +777,8 @@ function padAt(x, y) { const el = document.elementFromPoint(x, y); return el && 
 // « Fixe » : toujours la même force.
 function posVel(el, y, x) {
   const r = el.getBoundingClientRect();
-  const k = (y - r.top) / r.height;
+  // Touche couchée (écran en largeur) : plus près du bord droit = plus fort ; debout : plus bas = plus fort.
+  const k = r.width > r.height && x != null ? (x - r.left) / r.width : (y - r.top) / r.height;
   return 0.15 + 0.85 * Math.min(1, Math.max(0, k));
 }
 // Avec la pression ou la taille du doigt, la force est connue dès le toucher : la note part directement
