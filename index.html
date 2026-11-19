@@ -62,15 +62,19 @@
     #app { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); grid-auto-rows:min-content; column-gap:10px; row-gap:8px; align-content:start; }
     #app > .solo { grid-column:2; grid-row:1 / span 20; height:calc(100vh - 16px); }
     #app > :not(.solo) { grid-column:1; }
-    #pads { flex-direction:row-reverse; }          /* colonne grave à gauche, aiguë à droite */
+    #pads { flex-direction:row; }                  /* colonne aiguë au milieu, grave au bord de l'écran (à droite) */
     .prow { flex-direction:column-reverse; }       /* graves en bas */
     #pads .p { flex-direction:row; justify-content:flex-start; padding:0 0 0 12px; gap:8px; background-image:linear-gradient(to right, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
     .p b, .p i { writing-mode:horizontal-tb; transform:none; }
     .p b { font-size:15px !important; } .p i { font-size:11px !important; }
     .c { height:84px; }
     .c b { font-size:19px; }
-    .chords.many .c { height:50px; }
-    .chords.many .c b { font-size:15px; }
+    /* Accords pivotés d'un quart de tour, face au solo (téléphone tenu bord droit en haut, main gauche) :
+       le texte se lit tête vers la droite, la suite part de la colonne voisine du solo, 4 accords par colonne. */
+    .chords { grid-template-columns:none; grid-template-rows:repeat(4, 104px); grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); direction:rtl; }
+    .chords.many { grid-template-rows:repeat(4, 118px); }
+    .chords .c, .chords.many .c { grid-column:auto !important; height:auto !important; writing-mode:vertical-rl; text-orientation:sideways; direction:ltr; }
+    .chords .c b { max-width:none; max-height:96%; }
   }
   .chords.many { gap:5px; }
   .chords.many .c { height:48px; border-radius:11px; }
