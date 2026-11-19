@@ -45,6 +45,8 @@
   .c small { font:700 11px system-ui; color:var(--accent); } .c.i0 small { color:var(--gold); }
   .c b { font:700 16px system-ui; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:96%; }
   .c b.long { font-size:12px; }
+  .c b.mid { font-size:14px; }
+  .c b.xlong { font-size:10.5px; letter-spacing:-.2px; }
   .c.on { background:rgba(74,144,217,.55); } .c.on small { color:#fff; }
   .c.nx { border:2px solid rgba(245,179,66,.9); }
   input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
@@ -152,7 +154,15 @@ const Q = new URLSearchParams(location.search);
 if (Q.has("root")) { S.root = (+Q.get("root") % 12 + 12) % 12; S.rootL = Q.has("l") ? +Q.get("l") % 7 : keyL[S.root]; }
 if (Q.has("mode") && D.modes.some(m => m.id === Q.get("mode"))) S.mode = Q.get("mode");
 if (Q.has("stack") && D.stackKinds.some(k => k[0] === Q.get("stack"))) S.stack = Q.get("stack");
-const SUITE = (Q.get("suite") || "").split("-").map(x => x.split(".")).filter(x => x.length >= 3 && D.types[x[2]]).map(x => ({ pc: +x[0] % 12, l: +x[1] % 7, t: x[2] }));
+const SUITE = (Q.get("suite") || "").split("-").map(x => x.split(".")).filter(x => x.length >= 3 && D.types[x[2]]).map(x => ({ pc: +x[0] % 12, l: +x[1] % 7, t: x[2], b: (+x[3] || 0) % 12 }));
+// Basse d'un accord renversé (Fa add9/La) : b demi-tons au-dessus de la fondamentale, épelée d'après la note du type.
+// Taille du nom d'après sa longueur (noms barrés de Scaler : Fa♯maj9/Sol♯).
+const nameCls = n => n.length > 10 ? "xlong" : n.length > 8 ? "long" : n.length > 6 ? "mid" : "";
+function bassName(c) {
+  if (!c || !c.b) return "";
+  const tn = D.types[c.t].tones.find(y => y[0] % 12 === c.b);
+  return "/" + sp[(c.l + (tn ? tn[1] : 0)) % 7][(c.pc + c.b) % 12];
+}
 S.tab = SUITE.length ? "suite" : "deg";
 let cur = null;      // accord en cours {pc, l, t, i}
 let selS = null;     // gamme choisie {s, t}
@@ -174,7 +184,7 @@ function qualOf(t) {
   return h(4) && h(10) ? "dom" : h(4) && h(8) && !h(7) ? "aug" : h(4) ? "maj" : h(3) && h(6) && h(10) ? "hdim" : h(3) && h(6) ? "dim" : h(3) ? "min" : h(10) ? "dom" : "maj";
 }
 function chords() {
-  if (S.tab === "suite" && SUITE.length) return SUITE.map((c, k) => ({ i: k, pc: c.pc, l: c.l, t: c.t, acc: 0, q: qualOf(c.t), lab: `${k + 1}` }));
+  if (S.tab === "suite" && SUITE.length) return SUITE.map((c, k) => ({ i: k, pc: c.pc, l: c.l, t: c.t, b: c.b, acc: 0, q: qualOf(c.t), lab: `${k + 1}` }));
   const m = mode(), iv = m.iv;
   return iv.map((x, i) => {
     const t = m.stacks[S.stack][i];
@@ -819,7 +829,7 @@ function playChord(c, cv = 0.85) {
   chordVoices.forEach(v => v.stop());
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
   const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0) + 12 * (S.octPad || 0);
-  const notes = [base - 12, ...D.types[c.t].tones.map(x => base + x[0])];
+  const notes = [base - 12 + (c.b || 0), ...D.types[c.t].tones.map(x => base + x[0])];
   // Plus l'accord a de notes, plus chacune est douce : un accord de 8 notes sonne aussi fort qu'une triade, sans saturer.
   const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
   chordVoices = notes.map((n, i) => play(n, (i === 0 ? 0.82 : 1) * cv * per, S.tPad, busPad));
@@ -897,11 +907,11 @@ function render() {
   // Rangées de 4 ; la dernière se partage la largeur.
   const span = k => { const last = Math.floor((cs.length - 1) / 4) * 4; return k >= last ? 12 / (cs.length - last) : 3; };
   $("tabs").innerHTML = SUITE.length ? [["deg", "Degrés"], ["suite", "Ma suite"]].map(([k, l]) => `<button class="pill ${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("") : "";
-  $("chordTitle").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}` : "main gauche";
+  $("chordTitle").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}${bassName(cur)}` : "main gauche";
   $("chords").innerHTML = cs.map(c => {
     const on = cur && cur.i === c.i;
     const nx = !on && (suite ? cur && (cur.i + 1) % cs.length === c.i : nxt.includes((c.pc - S.root + 12) % 12));
-    return `<div class="c i${suite ? "s" : c.i} ${on ? "on" : ""} ${nx ? "nx" : ""}" style="grid-column:span ${span(c.i)}" data-c="${c.i}"><small>${c.lab}${nx ? " →" : ""}</small><b class="${(D.types[c.t].sym || "").length > 7 ? "long" : ""}">${sp[c.l][c.pc]}${D.types[c.t].sym}</b></div>`;
+    return `<div class="c i${suite ? "s" : c.i} ${on ? "on" : ""} ${nx ? "nx" : ""}" style="grid-column:span ${span(c.i)}" data-c="${c.i}"><small>${c.lab}${nx ? " →" : ""}</small><b class="${nameCls(sp[c.l][c.pc] + (D.types[c.t].sym || "") + bassName(c))}">${sp[c.l][c.pc]}${D.types[c.t].sym}${bassName(c)}</b></div>`;
   }).join("");
   // Les couleurs de l'accord touché : toutes les variantes de sa qualité, sur sa fondamentale.
   if (cur) {
@@ -1169,7 +1179,7 @@ $("chords").addEventListener("pointerdown", e => {
   const el = e.target.closest(".c"); if (!el) return;
   chordPointer = e.pointerId;
   const c = chords()[+el.dataset.c];
-  cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; selS = null;
+  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, i: c.i }; selS = null;
   const cv = touchVel(el, e.clientY, e); e.__vel = cv;
   playChord(c, cv); render();
   const mine = chordVoices;
