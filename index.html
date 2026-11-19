@@ -71,10 +71,15 @@
     .c b { font-size:19px; }
     /* Accords pivotés d'un quart de tour, face au solo (téléphone tenu bord droit en haut, main gauche) :
        le texte se lit tête vers la droite, la suite part de la colonne voisine du solo, 4 accords par colonne. */
-    .chords { grid-template-columns:none; grid-template-rows:repeat(4, 104px); grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); direction:rtl; }
-    .chords.many { grid-template-rows:repeat(4, 118px); }
+    .chords { grid-template-columns:none; grid-template-rows:repeat(4, clamp(64px, calc((100vh - 430px) / 4), 104px)); grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); direction:rtl; }
+    .chords.many { grid-template-rows:repeat(4, clamp(64px, calc((100vh - 430px) / 4), 118px)); }
     .chords .c, .chords.many .c { grid-column:auto !important; height:auto !important; writing-mode:vertical-rl; text-orientation:sideways; direction:ltr; }
     .chords .c b { max-width:none; max-height:96%; }
+    /* Cases courtes (écran bas) : noms plus petits, pour qu'ils tiennent en entier. */
+    .chords.many .c b { font-size:min(17px, calc((100vh - 430px) / 4 / 5.2)); }
+    .chords.many .c b.mid { font-size:min(15px, calc((100vh - 430px) / 4 / 6.4)); }
+    .chords.many .c b.long { font-size:min(13px, calc((100vh - 430px) / 4 / 8.8)); }
+    .chords.many .c b.xlong { font-size:min(12px, calc((100vh - 430px) / 4 / 10.6)); }
   }
   .chords.many { gap:5px; }
   .chords.many .c { height:48px; border-radius:11px; }
