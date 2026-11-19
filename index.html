@@ -69,7 +69,13 @@
     .p b { font-size:15px !important; } .p i { font-size:11px !important; }
     .c { height:84px; }
     .c b { font-size:19px; }
+    .chords.many .c { height:50px; }
+    .chords.many .c b { font-size:15px; }
   }
+  .chords.many { gap:5px; }
+  .chords.many .c { height:48px; border-radius:11px; }
+  .chords.many .c small { font-size:9px; line-height:1; }
+  .chords.many .c b.mid { font-size:13px; } .chords.many .c b.long { font-size:11.5px; } .chords.many .c b.xlong { font-size:10px; }
   #tSolo, #tPad { min-width:0; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
   #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
   .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
@@ -154,7 +160,7 @@ const Q = new URLSearchParams(location.search);
 if (Q.has("root")) { S.root = (+Q.get("root") % 12 + 12) % 12; S.rootL = Q.has("l") ? +Q.get("l") % 7 : keyL[S.root]; }
 if (Q.has("mode") && D.modes.some(m => m.id === Q.get("mode"))) S.mode = Q.get("mode");
 if (Q.has("stack") && D.stackKinds.some(k => k[0] === Q.get("stack"))) S.stack = Q.get("stack");
-const SUITE = (Q.get("suite") || "").split("-").map(x => x.split(".")).filter(x => x.length >= 3 && D.types[x[2]]).map(x => ({ pc: +x[0] % 12, l: +x[1] % 7, t: x[2], b: (+x[3] || 0) % 12 }));
+const SUITE = (Q.get("suite") || "").split("-").map(x => x.split(".")).filter(x => x.length >= 3 && D.types[x[2]]).map(x => ({ pc: +x[0] % 12, l: +x[1] % 7, t: x[2], b: (+x[3] || 0) % 12, v: x[4] ? x[4].split("_").map(Number).filter(n => n > 0 && n < 128) : null }));
 // Basse d'un accord renversé (Fa add9/La) : b demi-tons au-dessus de la fondamentale, épelée d'après la note du type.
 // Taille du nom d'après sa longueur (noms barrés de Scaler : Fa♯maj9/Sol♯).
 const nameCls = n => n.length > 10 ? "xlong" : n.length > 8 ? "long" : n.length > 6 ? "mid" : "";
@@ -184,7 +190,7 @@ function qualOf(t) {
   return h(4) && h(10) ? "dom" : h(4) && h(8) && !h(7) ? "aug" : h(4) ? "maj" : h(3) && h(6) && h(10) ? "hdim" : h(3) && h(6) ? "dim" : h(3) ? "min" : h(10) ? "dom" : "maj";
 }
 function chords() {
-  if (S.tab === "suite" && SUITE.length) return SUITE.map((c, k) => ({ i: k, pc: c.pc, l: c.l, t: c.t, b: c.b, acc: 0, q: qualOf(c.t), lab: `${k + 1}` }));
+  if (S.tab === "suite" && SUITE.length) return SUITE.map((c, k) => ({ i: k, pc: c.pc, l: c.l, t: c.t, b: c.b, v: c.v, acc: 0, q: qualOf(c.t), lab: `${k + 1}` }));
   const m = mode(), iv = m.iv;
   return iv.map((x, i) => {
     const t = m.stacks[S.stack][i];
@@ -829,7 +835,10 @@ function playChord(c, cv = 0.85) {
   chordVoices.forEach(v => v.stop());
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
   const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0) + 12 * (S.octPad || 0);
-  const notes = [base - 12 + (c.b || 0), ...D.types[c.t].tones.map(x => base + x[0])];
+  // Un accord importé (Scaler) garde son voicing exact : mêmes notes, même registre, d'un accord à l'autre.
+  // Seules les basses sous Do2 remontent d'une octave (inaudibles sur le haut-parleur du téléphone).
+  const notes = c.v && c.v.length ? [...new Set(c.v.map(n => { while (n < 36) n += 12; return n + 12 * (S.octPad || 0); }))].sort((a, b) => a - b)
+    : [base - 12 + (c.b || 0), ...D.types[c.t].tones.map(x => base + x[0])];
   // Plus l'accord a de notes, plus chacune est douce : un accord de 8 notes sonne aussi fort qu'une triade, sans saturer.
   const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
   chordVoices = notes.map((n, i) => play(n, (i === 0 ? 0.82 : 1) * cv * per, S.tPad, busPad));
@@ -908,6 +917,8 @@ function render() {
   const span = k => { const last = Math.floor((cs.length - 1) / 4) * 4; return k >= last ? 12 / (cs.length - last) : 3; };
   $("tabs").innerHTML = SUITE.length ? [["deg", "Degrés"], ["suite", "Ma suite"]].map(([k, l]) => `<button class="pill ${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("") : "";
   $("chordTitle").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}${bassName(cur)}` : "main gauche";
+  // Une longue suite (Scaler : 32 accords) : cases basses, pour que tout tienne à l'écran.
+  $("chords").classList.toggle("many", cs.length > 12);
   $("chords").innerHTML = cs.map(c => {
     const on = cur && cur.i === c.i;
     const nx = !on && (suite ? cur && (cur.i + 1) % cs.length === c.i : nxt.includes((c.pc - S.root + 12) % 12));
@@ -1179,7 +1190,7 @@ $("chords").addEventListener("pointerdown", e => {
   const el = e.target.closest(".c"); if (!el) return;
   chordPointer = e.pointerId;
   const c = chords()[+el.dataset.c];
-  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, i: c.i }; selS = null;
+  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, v: c.v, i: c.i }; selS = null;
   const cv = touchVel(el, e.clientY, e); e.__vel = cv;
   playChord(c, cv); render();
   const mine = chordVoices;
@@ -1189,7 +1200,7 @@ $("chords").addEventListener("pointerdown", e => {
 $("vars").addEventListener("pointerdown", e => {
   const b = e.target.closest("[data-v]"); if (!b || !cur) return;
   chordPointer = e.pointerId;
-  cur = Object.assign({}, cur, { t: b.dataset.v }); selS = null;
+  cur = Object.assign({}, cur, { t: b.dataset.v, v: null }); selS = null;
   playChord(cur); render();
 });
 $("tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; stopChord(); cur = null; selS = null; render(); });
