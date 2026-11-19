@@ -735,7 +735,7 @@ function render() {
   const op = S.octPad || 0; $("octPadLbl").textContent = `oct. ${op > 0 ? "+" : ""}${op}`;
   $("touch").textContent = { frappe: "Frappe", pos: "Position ↓", fixe: "Force fixe" }[S.touchMode]; $("touch").classList.toggle("on", S.touchMode !== "fixe");
   $("velInfo").textContent = S.touchMode === "frappe" ? (lastInfo || (S.cal ? `étalonné : ${FEATNAME[S.cal.f]}` : "touche « Étalonner »")) : S.touchMode === "pos" ? "bas de la touche = fort" : "";
-  $("aftBtn").textContent = S.aft ? "Aftertouch : vibrato" : "Aftertouch : non"; $("aftBtn").classList.toggle("on", !!S.aft);
+  $("aftBtn").textContent = S.aft ? "Vibrato : glisser" : "Vibrato : non"; $("aftBtn").classList.toggle("on", !!S.aft);
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev; $("vMax").value = S.vMax;
   // gamme
   const cands = scaleCands();
@@ -982,18 +982,27 @@ document.addEventListener("pointerdown", clearStale, true);
 window.addEventListener("blur", () => { fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); if (!S.hold) { chordPointer = null; stopChord(); } });
 padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY, e);
   const f = fingers.get(e.pointerId); if (f) glideLog.set(e.pointerId, { notes: [f.n], moves: 0, t0: performance.now() }); });
-// Aftertouch : après l'attaque (les 60 premières ms donnent la pression de référence), appuyer plus fort sur la touche
-// tenue déclenche le vibrato : rien jusqu'à +15 % de pression, le maximum vers deux fois la pression d'attaque.
-const aft = new Map();   // pointerId → {t0, p0, a}
-padsEl.addEventListener("pointerdown", e => { aft.set(e.pointerId, { t0: performance.now(), p0: e.pressure || 0, a: 0 }); }, true);
+// Modulation (vibrato) d'une note tenue. Ce téléphone n'envoie aucun événement tant que le doigt ne bouge pas : la
+// pression seule ne suffit pas. Le geste principal est donc de glisser le doigt LE LONG de la touche (sans changer de
+// note) : rien jusqu'à 6 px, le maximum à 60 px du point de départ ; revenir au point de départ l'éteint.
+// La pression compte aussi quand elle arrive (au-delà de +15 % de celle de l'attaque).
+const aft = new Map();   // pointerId → {t0, p0, x0, y0, a, pmin, pmax}
+padsEl.addEventListener("pointerdown", e => { aft.set(e.pointerId, { t0: performance.now(), p0: e.pressure || 0, x0: e.clientX, y0: e.clientY, a: 0, pmin: e.pressure, pmax: e.pressure, dmax: 0 }); }, true);
 function aftertouch(e) {
   const k = aft.get(e.pointerId), f = fingers.get(e.pointerId);
-  if (!k || !f || !S.aft || !(e.pressure > 0) || e.pressure === 0.5 && k.p0 === 0.5) return;
-  if (performance.now() - k.t0 < 60) { k.p0 = Math.max(k.p0, e.pressure); return; }
-  const a = Math.min(1, Math.max(0, (Math.log(e.pressure / k.p0) - 0.14) / 0.55));
-  if (Math.abs(a - k.a) < 0.03) return;
+  if (!k || !f) return;
+  k.pmin = Math.min(k.pmin, e.pressure); k.pmax = Math.max(k.pmax, e.pressure);
+  if (!S.aft) return;
+  if (performance.now() - k.t0 < 60) { k.p0 = Math.max(k.p0, e.pressure || 0); }
+  // Le long de la touche : vertical pour une touche debout, horizontal pour une barre couchée (écran en largeur).
+  const r = f.el.getBoundingClientRect(), along = r.width > r.height ? Math.abs(e.clientX - k.x0) : Math.abs(e.clientY - k.y0);
+  k.dmax = Math.max(k.dmax, along);
+  const aSlide = Math.min(1, Math.max(0, (along - 6) / 54));
+  const aPress = performance.now() - k.t0 >= 60 && e.pressure > 0 && k.p0 > 0 && e.pressure !== 0.5 ? Math.min(1, Math.max(0, (Math.log(e.pressure / k.p0) - 0.14) / 0.55)) : 0;
+  const a = Math.max(aSlide, aPress);
+  if (Math.abs(a - k.a) < 0.03 && !(a === 0 && k.a > 0)) return;
   k.a = a; f.v.mod(a);
-  const vi = $("velInfo"); if (vi) vi.textContent = (lastInfo || "") + (a > 0 ? ` · vibrato ${Math.round(a * 100)} %` : "");
+  const vi = $("velInfo"); if (vi) vi.textContent = (lastInfo ? lastInfo + " · " : "") + (a > 0 ? `vibrato ${Math.round(a * 100)} %` : "");
 }
 document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) {
   aftertouch(e);
@@ -1004,12 +1013,13 @@ document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) {
 // Journal du glissé (pour comprendre ce que fait le téléphone) : notes traversées, et doigt repris (pointercancel).
 const glideLog = new Map();
 const lift = e => {
-  aft.delete(e.pointerId);
   if (fingers.has(e.pointerId)) {
     const g = glideLog.get(e.pointerId); glideLog.delete(e.pointerId);
-    if (g) report({ glide: g.notes, moves: g.moves, fin: e.type, ms: Math.round(performance.now() - g.t0) });
+    const k = aft.get(e.pointerId);
+    if (g) report({ glide: g.notes, moves: g.moves, fin: e.type, ms: Math.round(performance.now() - g.t0), pmin: k && k.pmin, pmax: k && k.pmax, dmax: k && Math.round(k.dmax), mod: k && +k.a.toFixed(2) });
     fingerTo(e.pointerId, null, 0);
   }
+  aft.delete(e.pointerId);
 };
 document.addEventListener("pointerup", lift);
 document.addEventListener("pointercancel", lift);
