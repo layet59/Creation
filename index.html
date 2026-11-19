@@ -1095,7 +1095,10 @@ function aftertouch(e) {
 document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) {
   aftertouch(e);
   const g = glideLog.get(e.pointerId); if (g) g.moves++;
-  fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY);
+  // Entre deux touches (l'espace de 3 px) ou hors du clavier, la note continue : seul le lever du doigt l'arrête.
+  // (Avant, passer sur cet espace coupait la note et la page ne suivait plus le doigt : le glissé ne marchait pas.)
+  const el = padAt(e.clientX, e.clientY);
+  if (el) fingerTo(e.pointerId, el, e.clientY);
   const f = fingers.get(e.pointerId); if (g && f && g.notes[g.notes.length - 1] !== f.n) g.notes.push(f.n);
 } });
 // Journal du glissé (pour comprendre ce que fait le téléphone) : notes traversées, et doigt repris (pointercancel).
