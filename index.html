@@ -18,6 +18,7 @@
   .grow { flex:1; min-width:0; }
   .scroller { display:flex; gap:5px; overflow-x:auto; touch-action:pan-x; scrollbar-width:none; min-width:0; }
   .scroller::-webkit-scrollbar { display:none; }
+  #scales .pill, #keysMode .pill { font-size:12px; padding:6px 10px; flex-shrink:0; }
   .vars .pill { font-size:13px; padding:7px 10px; } .vars .pill.on { background:rgba(245,179,66,.45); }
   .card { border-radius:16px; padding:9px 10px; display:flex; flex-direction:column; gap:7px; }
   .solo { background:rgba(74,144,217,.10); border:1px solid rgba(74,144,217,.55); flex:1; min-height:0; }
@@ -85,7 +86,8 @@
       <span class="lbl" id="octLbl"></span>
       <button class="pill" id="octUp">+</button>
     </div>
-    <div class="chips" id="scales"></div>
+    <div class="scroller" id="scales"></div>
+    <div class="scroller" id="keysMode"></div>
   </div>
   <div class="row">
     <button class="pill on" id="keyBtn"></button>
@@ -106,7 +108,7 @@
     <div class="scroller vars" id="vars"></div>
     <div class="chords" id="chords"></div>
   </div>
-  <div class="row"><span class="lbl">Toucher</span><button class="pill" id="touch"></button><span class="lbl grow" id="velInfo"></span><button class="pill" id="aftBtn"></button><button class="pill" id="calBtn">Étalonner</button></div>
+  <div class="row"><span class="lbl">Toucher</span><button class="pill" id="touch"></button><span class="lbl grow" id="velInfo" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span><button class="pill" id="aftBtn"></button><button class="pill" id="calBtn">Étalonner</button></div>
   <div class="row">
     <span class="lbl">Accords</span><input type="range" id="vPad" min="0" max="100">
     <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="100">
@@ -184,15 +186,19 @@ function chords() {
   });
 }
 function chordPcs(c) { return [...new Set(D.types[c.t].tones.map(x => (c.pc + x[0]) % 12))]; }
+// La gamme de l'accord précédent (pour la continuité, comme le scriptlet qui part de la gamme en cours).
+const scaleMem = { id: null, pcs: null, prev: null };
 function scaleCands() {
   if (!cur) return [];
   const pcs = chordPcs(cur), keyPcs = keyScale().map(n => n.pc), sug = D.types[cur.t].sug;
+  const cid = cur.pc + "." + cur.t, prev = cid !== scaleMem.id ? scaleMem.pcs : scaleMem.prev;
   const out = [];
   for (let sh = 0; sh < 12; sh++) for (const g of D.gscales) {
     const t = (cur.pc + sh) % 12;
     if (!pcs.every(p => g.mask[(p - t + 12) % 12] === 1)) continue;
     let score = -g.n + (sh === 0 ? 4 + (g.i === sug ? 12 : 0) : 0);
     for (let i = 0; i < 12; i++) if (g.mask[(i - t + 12) % 12] === 1 && keyPcs.includes(i)) score += 3;
+    if (prev) for (let i = 0; i < 12; i++) if (g.mask[(i - t + 12) % 12] === 1 && prev.includes(i)) score += 2;
     out.push({ g, t, sh, score });
   }
   return out.sort((a, b) => b.score - a.score).slice(0, 4);
@@ -811,10 +817,36 @@ function render() {
   const snap = n => { for (const d of [0, 1, -1, 2, -2]) if (pcs.includes(((n + d) % 12 + 12) % 12)) return n + d; return n; };
   // 4 octaves : la rangée aiguë (de low+12 à low+36) puis la grave (de low−12 à low+12), 15 touches chacune.
   const two = b => [...kiv.map(x => b + x), ...kiv.map(x => b + 12 + x), b + 24].map(snap);
-  const rows = [two(low + 12), two(low - 12)];
+  // Le clavier selon le sélecteur (comme le scriptlet : la main droite ne joue que les notes permises) :
+  //  gamme  : une touche par note de la gamme de l'accord, sans doublon ni trou ;
+  //  sansav : la même, moins les notes à éviter ;
+  //  accord : les seules notes de l'accord (une harpe d'arpèges) ;
+  //  ton    : l'ancien clavier (les notes de la tonalité, chacune ramenée à la plus proche de la gamme).
+  // Les touches partent d'une hauteur fixe (low) : d'un accord à l'autre, les notes communes restent à la même place.
+  const km = S.keysMode || "gamme";
+  const allowed = km === "accord" && cp.length ? cp : km === "sansav" ? pcs.filter(p => !avoid.includes(p)) : pcs;
+  const scaleSpan = b => { const out = []; for (let n = b; n <= b + 24; n++) if (allowed.includes(((n % 12) + 12) % 12)) out.push(n); return out; };
+  const rows = km === "ton" ? [two(low + 12), two(low - 12)] : [scaleSpan(low + 12), scaleSpan(low - 12)];
+  // La gamme retenue pour cet accord : la suivante sera choisie de préférence dans sa continuité.
+  const cid = cur ? cur.pc + "." + cur.t : null;
+  if (cid !== scaleMem.id) { scaleMem.prev = scaleMem.pcs; scaleMem.id = cid; }
+  scaleMem.pcs = pcs;
+  $("keysMode").innerHTML = [["gamme", "Gamme"], ["sansav", "Sans notes à éviter"], ["accord", "Accord seul"], ["ton", "Tonalité"]]
+    .map(([k, l]) => `<button class="pill ${km === k ? "on" : ""}" data-km="${k}">${l}</button>`).join("");
   padNotes = rows;
   const role = pc => { if (!cur) return ""; const x = D.types[cur.t].tones.find(t => t[0] % 12 === (pc - cur.pc + 12) % 12); return x ? x[2] : TENS[(pc - cur.pc + 12) % 12]; };
-  $("pads").innerHTML = rows.map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${nameOf(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
+  // L'orthographe des touches suit l'accord (ses notes, d'après leurs degrés) puis la gamme (une lettre par degré) :
+  // en Mi dorien on lit Do♯, pas Ré♭.
+  const spellOk = x => x && x !== "?" && !x.includes("𝄪") && !x.includes("𝄫");
+  const letterOf = pc => { const nm = nameOf(pc); for (let l = 0; l < 7; l++) if (sp[l][pc] === nm) return l; return keyL[pc]; };
+  const tl = cur && tonic === cur.pc ? cur.l : letterOf(tonic);
+  const scaleSorted = pcs.length === 7 ? [...pcs].sort((a, b) => ((a - tonic + 12) % 12) - ((b - tonic + 12) % 12)) : null;
+  const keyName = pc => {
+    if (cur) { const x = D.types[cur.t].tones.find(t => t[0] % 12 === (pc - cur.pc + 12) % 12); if (x) { const nm = sp[(cur.l + x[1]) % 7][pc]; if (spellOk(nm)) return nm; } }
+    if (scaleSorted) { const i = scaleSorted.indexOf(pc); if (i >= 0) { const nm = sp[(tl + i) % 7][pc]; if (spellOk(nm)) return nm; } }
+    return nameOf(pc);
+  };
+  $("pads").innerHTML = rows.map((r, ri) => `<div class="prow">${r.map(n => `<div class="p ${cp.includes(n % 12) ? "ch" : avoid.includes(n % 12) ? "av" : ""}" data-n="${n}"><b>${keyName(n % 12)}</b><i>${role(n % 12)}</i></div>`).join("")}</div>`).join("");
   // accords
   const cs = chords();
   const suite = S.tab === "suite" && SUITE.length > 0;
@@ -1106,6 +1138,7 @@ $("vars").addEventListener("pointerdown", e => {
 });
 $("tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; stopChord(); cur = null; selS = null; render(); });
 $("stop").onclick = () => { stopChord(); cur = null; selS = null; render(); };
+$("keysMode").addEventListener("click", e => { const b = e.target.closest("[data-km]"); if (!b) return; S.keysMode = b.dataset.km; save(); render(); });
 $("scales").addEventListener("click", e => { const b = e.target.closest("[data-s]"); if (!b) return; selS = { s: +b.dataset.s, t: +b.dataset.t }; render(); });
 $("stacks").addEventListener("click", e => { const b = e.target.closest("[data-stack]"); if (!b) return; S.stack = b.dataset.stack; save(); if (cur && S.tab !== "suite") { const c = chords()[cur.i]; cur = { pc: c.pc, l: c.l, t: c.t, i: c.i }; if (S.hold || chordPointer !== null) playChord(c); } render(); });
 // Choisir un son : la liste par familles ; un toucher l'essaie (une note ou l'accord) et le garde.
