@@ -91,6 +91,15 @@
   #tSolo, #tPad { min-width:0; flex-shrink:1; overflow:hidden; text-overflow:ellipsis; }
   #pads .p { background-image:linear-gradient(to bottom, rgba(255,255,255,.22), rgba(0,0,0,.22)); }
   .chords .c { background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25)); }
+  /* Portrait (écran extérieur du Honor, ~415×930) : une longue suite ne doit pas écraser le solo.
+     Le solo garde au moins 30 % de la hauteur, et les cases d'une longue suite sont plus basses. */
+  @media (orientation: portrait) {
+    .solo { min-height:25vh; }
+    .chords.many { gap:4px; }
+    .chords.many .c { height:36px; border-radius:9px; }
+    .chords.many .c small { font-size:8.5px; }
+    #app { overflow-y:auto; }
+  }
 </style>
 </head>
 <body>
