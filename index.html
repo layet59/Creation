@@ -1861,17 +1861,18 @@ $("stacks").addEventListener("click", e => { const b = e.target.closest("[data-s
 // Choisir un son : la liste par familles ; un toucher l'essaie (une note ou l'accord) et le garde.
 let soundFor = null;
 // La liste : la banque d'échantillons (3 au choix), puis les vrais instruments par familles, puis les synthés.
+const sndCur = () => soundFor === "solo" ? S.tSolo : soundFor === "bass" ? S.tBass : S.tPad;
+const sndSt = (id, curId) => { const I = id.startsWith("gm:") ? SF[sfKey(S.bank, id.slice(3))] : null;
+  return id.startsWith("hq:") ? (id === curId ? hqStatus(id.slice(3)) : "") : I ? (I.state === "load" ? " ⏳" : I.state === "err" ? " ⚠" : "") : ""; };
 function openSounds(which) {
   soundFor = which;
-  const curId = which === "solo" ? S.tSolo : which === "bass" ? S.tBass : S.tPad;
+  const curId = sndCur();
   $("soundTitle").textContent = which === "solo" ? "Son du solo" : which === "bass" ? "Son de la basse" : "Son des accords";
   const fams = [...new Set(GM.map(g => g[2]))];
   const hqFams = [...new Set(Object.values(HQ).filter(I => !I.m).map(I => I.f))];
   const sfFams = [...new Set(Object.values(HQ).filter(I => I.m).map(I => I.f))];
   const cats = [...new Set(SOUND_IDS.map(k => SOUNDS[k].cat))];
-  const pill = (id, label) => { const I = id.startsWith("gm:") ? SF[sfKey(S.bank, id.slice(3))] : null;
-    const st = id.startsWith("hq:") ? (id === curId ? hqStatus(id.slice(3)) : "") : I ? (I.state === "load" ? " ⏳" : I.state === "err" ? " ⚠" : "") : "";
-    return `<button class="pill ${curId === id ? "on" : ""}" data-snd="${id}">${label}${st}</button>`; };
+  const pill = (id, label) => `<button class="pill ${curId === id ? "on" : ""}" data-snd="${id}" data-l="${label.replace(/"/g, "&quot;")}">${label}${sndSt(id, curId)}</button>`;
   // Trois parties, avec un raccourci vers chacune en haut : les synthés (nappes et cuivres doux d'abord), les instruments enregistrés, les 128 sons General MIDI.
   const sec = (k, t) => `<div class="lbl" data-sec="${k}" style="margin-top:8px;font-weight:800;letter-spacing:1px;color:var(--fg)">${t}</div>`;
   $("soundJump").innerHTML = [["mine", "Mes SoundFonts"], ["syn", "Synthés"], ["hq", "Instruments"], ["gm", "General MIDI"]].map(([k, l]) => `<button class="pill" data-jump="${k}">${l}</button>`).join("");
@@ -1888,7 +1889,15 @@ function openSounds(which) {
     fams.map(f => `<div class="lbl">${f}</div><div class="chips">${GM.filter(g => g[2] === f).map(g => pill("gm:" + g[0], g[1])).join("")}</div>`).join("");
   $("sounds").style.display = "flex";
 }
-renderSoundState = () => { if ($("sounds").style.display === "flex") { const sc = $("sounds").firstElementChild.scrollTop; openSounds(soundFor); $("sounds").firstElementChild.scrollTop = sc; } render(); };
+// Pendant un chargement (des centaines de fichiers pour un piano), la liste n'est jamais refaite : un bouton remplacé
+// entre le doigt posé et le doigt levé faisait tomber le toucher sur le fond, qui fermait la liste. On met à jour sur place.
+function refreshSounds() {
+  const curId = sndCur();
+  $("soundList").querySelectorAll("[data-snd]").forEach(b => { const id = b.dataset.snd, t = b.dataset.l + sndSt(id, curId);
+    if (b.textContent !== t) b.textContent = t; b.classList.toggle("on", id === curId); });
+  $("soundList").querySelectorAll("[data-bank]").forEach(b => b.classList.toggle("on", b.dataset.bank === S.bank));
+}
+renderSoundState = () => { if ($("sounds").style.display === "flex") refreshSounds(); render(); };
 function tryChord() { if (cur) { playChord(cur); if (!S.hold) setTimeout(() => { if (chordPointer === null && !S.hold) stopChord(); }, 1400); } }
 function trySolo() { const n = 60 + S.root + 12 * S.oct; const v = play(n, 0.8, S.tSolo, busSolo); setTimeout(() => v.stop(), 700); }
 $("tSolo").onclick = () => openSounds("solo");
@@ -1909,7 +1918,7 @@ $("sounds").addEventListener("click", e => {
     go();
     if (id.startsWith("hq:")) { const I = HQ[id.slice(3)]; const w = setInterval(() => { if (I.st.done >= I.st.want) { clearInterval(w); setTimeout(go, 200); } }, 300); setTimeout(() => clearInterval(w), 30000); }
     if (id.startsWith("gm:")) { const I = SF[sfKey(S.bank, id.slice(3))]; if (I && I.state === "load") { const w = setInterval(() => { if (I.state !== "load") { clearInterval(w); if (I.state === "ok") setTimeout(go, 400); } }, 200); } }
-    const sc = $("sounds").firstElementChild.scrollTop; openSounds(soundFor); $("sounds").firstElementChild.scrollTop = sc; render(); return;
+    refreshSounds(); render(); return;
   }
   if (e.target === $("sounds") || e.target.id === "soundOk" || e.target.id === "soundOk2") $("sounds").style.display = "none";
 });
