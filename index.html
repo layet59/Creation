@@ -50,7 +50,7 @@
   .c b.long { font-size:12px; }
   .c b.mid { font-size:14px; }
   .c b.xlong { font-size:10.5px; letter-spacing:-.2px; }
-  .c.on { background:rgba(74,144,217,.55); } .c.on small { color:#fff; }
+  .c.on { background:rgba(74,144,217,.55); border:2px solid rgba(245,179,66,.95); } .c.on small { color:#fff; }
   .c.nx { border:2px solid rgba(245,179,66,.9); }
   input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
   .lbl { font-size:11px; color:var(--muted); }
@@ -965,7 +965,7 @@ function render() {
   $("chords").classList.toggle("many", cs.length > 12);
   $("chords").innerHTML = cs.map(c => {
     const on = cur && cur.i === c.i;
-    const nx = !on && (suite ? cur && (cur.i + 1) % cs.length === c.i : nxt.includes((c.pc - S.root + 12) % 12));
+    const nx = false;   // plus de repère « accord suivant » (incitait à toucher dessus)
     return `<div class="c i${suite ? "s" : c.i} ${on ? "on" : ""} ${nx ? "nx" : ""}" style="grid-column:span ${span(c.i)}" data-c="${c.i}"><small>${c.lab}${nx ? " →" : ""}</small><b class="${nameCls(sp[c.l][c.pc] + (D.types[c.t].sym || "") + bassName(c))}">${sp[c.l][c.pc]}${D.types[c.t].sym}${bassName(c)}</b></div>`;
   }).join("");
   // Les couleurs de l'accord touché : toutes les variantes de sa qualité, sur sa fondamentale.
