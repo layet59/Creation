@@ -241,7 +241,7 @@
   <div class="lbl">Rythme</div><div class="chips" id="accStyles"></div>
   <div class="lbl">Basse et batterie</div>
   <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="drumsBtn"></button></div>
-  <div class="row"><span class="lbl">Volume basse + batterie</span><input type="range" id="vAcc" min="0" max="100"></div>
+  <div class="row"><span class="lbl">Basse</span><input type="range" id="vBass" min="0" max="100"><span class="lbl">Batterie</span><input type="range" id="vDrum" min="0" max="100"></div>
   <div class="lbl">Les accords du rythme prennent le son des accords (et le curseur « Accords »).</div>
 </div></div>
 <div id="start">Touche pour commencer</div>
@@ -265,14 +265,15 @@ if (!S.style) S.style = "pop";
 if (!S.tBass) S.tBass = "hq:basseelec";
 if (S.bassOn == null) S.bassOn = true;
 if (S.drums == null) S.drums = true;
-if (S.vAcc == null) S.vAcc = 70;
+if (S.vBass == null) S.vBass = 70;
+if (S.vDrum == null) S.vDrum = 70;
 S.accOn = false;
 if (!S.touchMode) S.touchMode = S.fixe ? "fixe" : "frappe";
 const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S)); } catch (e) {} mirrorSoon(); };
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "vAcc", "keysMode", "stack"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "vBass", "vDrum", "keysMode", "stack"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -356,7 +357,7 @@ function scaleCands() {
 }
 
 // ------------------------------------------------------------------ synthé WebAudio
-let ac = null, master, busPad, busSolo, busAcc, revSend, boost, chPad, chSolo;
+let ac = null, master, busPad, busSolo, busAcc, busBass, busDrum, revSend, boost, chPad, chSolo;
 // AT : l'instant (horloge audio) où la prochaine note doit partir ; 0 = tout de suite. L'accompagnement programme
 // ses notes un peu à l'avance pour qu'elles tombent pile en mesure.
 let AT = 0;
@@ -401,10 +402,11 @@ function audio() {
   chPad = chorus(busPad); chSolo = chorus(busSolo);
   revSend = ac.createGain(); busPad.connect(revSend); busSolo.connect(revSend); revSend.connect(conv); conv.connect(master);
   // Basse et batterie de l'accompagnement : leur propre volume, un peu de réverb.
-  busAcc = ac.createGain(); busAcc.connect(master); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
+  busAcc = ac.createGain(); busAcc.connect(master);
+  busBass = ac.createGain(); busDrum = ac.createGain(); busBass.connect(busAcc); busDrum.connect(busAcc); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
   mix(); preload();
 }
-function mix() { if (!ac) return; busAcc.gain.value = (S.vAcc ?? 70) / 100 * 1.1; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
+function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 2; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
   const chOf = id => (SOUNDS[id] && SOUNDS[id].ch) || 0;
   chPad.gain.value = busPad.gain.value * chOf(S.tPad) * 0.8; chSolo.gain.value = busSolo.gain.value * chOf(S.tSolo) * 0.8;
   boost.gain.value = 1 + 3 * Math.pow(S.vMax / 100, 1.3); }
@@ -1416,7 +1418,7 @@ const style = () => STYLES[S.style] || STYLES.pop;
 // Batterie de synthèse, douce : rien à charger.
 function drum(kind, T, v) {
   noiseBuf();
-  const g = ac.createGain(); g.connect(busAcc); g.gain.setValueAtTime(0, T);
+  const g = ac.createGain(); g.connect(busDrum); g.gain.setValueAtTime(0, T);
   const env = (peak, dec) => { g.gain.linearRampToValueAtTime(peak, T + 0.002); g.gain.setTargetAtTime(0, T + 0.004, dec / 3); };
   const noise = (type, f, q) => { const s = ac.createBufferSource(); s.buffer = NOISE; const fl = ac.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; s.connect(fl); fl.connect(g); s.start(T, Math.random() * 0.5); s.stop(T + 0.6); };
   if (kind === "k") { const o = ac.createOscillator(); o.frequency.setValueAtTime(150, T); o.frequency.exponentialRampToValueAtTime(48, T + 0.12); o.connect(g); o.start(T); o.stop(T + 0.5); env(v * 1.1, 0.32); }
@@ -1458,7 +1460,7 @@ function schedStep(k, T, noDrums) {
   }
   if (S.bassOn) for (const [ks, gl, a, deg] of st.B || []) if (ks === k) {
     const d = deg === "a" ? (acc.bar % 2 ? "f" : "r") : deg;
-    accNote(bassNote(cur, d), a * (0.55 + 0.45 * vel), S.tBass, busAcc, T, gl * sd * 0.95, "B", k);
+    accNote(bassNote(cur, d), a * (0.55 + 0.45 * vel), S.tBass, busBass, T, gl * sd * 0.95, "B", k);
   }
 }
 function accTick() {
@@ -1503,7 +1505,7 @@ function accChord(c, cv) {
     const toEnd = (st.steps - acc.step) * sd + Math.max(0, acc.nextT - now);
     const notes = chordNotes(c), per = Math.min(1, 2.2 / Math.sqrt(notes.length));
     notes.forEach((n, i) => accNote(n, (i === 0 ? 0.8 : 1) * acc.vel * per * 0.85, S.tPad, busPad, now + 0.005, toEnd, "C", -1));
-    if (S.bassOn) accNote(bassNote(c, "r"), 0.8 * acc.vel, S.tBass, busAcc, now + 0.005, toEnd, "B", -1);
+    if (S.bassOn) accNote(bassNote(c, "r"), 0.8 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1);
   }
 }
 function chordPlay(c, cv) { if (S.accOn) accChord(c, cv); else playChord(c, cv); }
@@ -1524,9 +1526,9 @@ function renderAcc() {
   $("bassOnBtn").textContent = S.bassOn ? "Basse ✓" : "Basse"; $("bassOnBtn").classList.toggle("on", S.bassOn);
   $("drumsBtn").textContent = S.drums ? "Batterie ✓" : "Batterie"; $("drumsBtn").classList.toggle("on", S.drums);
   $("tBass").textContent = "Son : " + soundName(S.tBass) + sfStatus(S.tBass);
-  $("vAcc").value = S.vAcc;
+  $("vBass").value = S.vBass; $("vDrum").value = S.vDrum;
 }
-function tryBass() { audio(); const v = play(40 + ((S.root - 4 + 12) % 12), 0.85, S.tBass, busAcc); setTimeout(() => v.stop(), 700); }
+function tryBass() { audio(); const v = play(40 + ((S.root - 4 + 12) % 12), 0.85, S.tBass, busBass); setTimeout(() => v.stop(), 700); }
 $("accBtn").onclick = () => {
   if (S.accOn) { S.accOn = false; stopAcc(); }
   else { S.accOn = true; stopChord(); audio(); preload(); if (cur) startAcc(); }
@@ -1541,7 +1543,8 @@ $("accBox").addEventListener("click", e => {
 $("bassOnBtn").onclick = () => { S.bassOn = !S.bassOn; save(); renderAcc(); };
 $("drumsBtn").onclick = () => { S.drums = !S.drums; save(); renderAcc(); };
 $("tBass").onclick = () => { $("accBox").style.display = "none"; openSounds("bass"); };
-$("vAcc").oninput = e => { S.vAcc = +e.target.value; mix(); save(); };
+$("vBass").oninput = e => { S.vBass = +e.target.value; mix(); save(); };
+$("vDrum").oninput = e => { S.vDrum = +e.target.value; mix(); save(); };
 const setBpm = b => { S.bpm = Math.max(40, Math.min(200, Math.round(b))); save(); renderAcc(); };
 $("bpmDn").onclick = () => setBpm(S.bpm - 2);
 $("bpmUp").onclick = () => setBpm(S.bpm + 2);
