@@ -238,9 +238,9 @@
 <div id="accBox" class="over"><div class="box" style="max-height:calc(100vh - 44px);overflow-y:auto;touch-action:pan-y">
   <div class="row"><b class="grow">Accompagnement</b><button class="pill on" id="accOk" style="padding:9px 18px">Fermer</button></div>
   <div class="lbl" style="line-height:1.4">Active ▶ puis touche un accord : le rythme part sur ce toucher et joue toujours l'accord en cours. Change d'accord quand tu veux (un peu avant le temps, il tombe pile dessus). ⏹ arrête tout.</div>
-  <div class="lbl">Rythme</div><div class="chips" id="accStyles"></div>
+  <div id="accStyles" style="display:flex;flex-direction:column;gap:4px"></div>
   <div class="lbl">Basse et batterie</div>
-  <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="drumsBtn"></button></div>
+  <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="drumsBtn"></button><button class="pill" id="fillsBtn"></button></div>
   <div class="row"><span class="lbl">Basse</span><input type="range" id="vBass" min="0" max="100"><span class="lbl">Batterie</span><input type="range" id="vDrum" min="0" max="100"></div>
   <div class="lbl">Les accords du rythme prennent le son des accords (et le curseur « Accords »).</div>
 </div></div>
@@ -265,6 +265,7 @@ if (!S.style) S.style = "pop";
 if (!S.tBass) S.tBass = "hq:basseelec";
 if (S.bassOn == null) S.bassOn = true;
 if (S.drums == null) S.drums = true;
+if (S.fills == null) S.fills = true;
 if (S.vBass == null) S.vBass = 70;
 if (S.vDrum == null) S.vDrum = 70;
 S.accOn = false;
@@ -273,7 +274,7 @@ const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S));
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "vBass", "vDrum", "keysMode", "stack"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "fills", "vBass", "vDrum", "keysMode", "stack"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -1393,45 +1394,129 @@ $("vars").addEventListener("pointerdown", e => {
   chordPlay(cur); render();
 });
 // ------------------------------------------------------------------ accompagnement
-// Une mesure = 16 doubles-croches (12 en 3/4). C = l'accord plaqué [pas, durée en pas, accent] ; A = une note d'arpège ;
-// B = la basse [pas, durée, accent, r|f|o|a (fondamentale, quinte, octave, alternée)] ; batterie : k grosse caisse,
-// s caisse claire, h charleston, o charleston ouvert, r bord de caisse [pas, force].
+// Une mesure = beats × div pas (div 4 : doubles-croches ; div 3 : triolets, pour shuffle, swing, 6/8, 12/8).
+// C = l'accord [pas, durée en pas, accent, options : u = sans la basse, s = gratté vers le haut, S = vers le bas] ;
+// A = une note d'arpège [pas, durée, accent] (ord : ordre des notes, 0 = la plus grave, 1 = la plus aiguë ; up : montée seule ;
+// wide : sur deux octaves) ; B = la basse [pas, durée, accent, degré : r fondamentale (ou renversement), f quinte, o octave,
+// a alternée r/f, 3 tierce, 6 sixte, 7 septième] ;
+// batterie [pas, force] : k grosse caisse, s caisse claire, c clap, h charleston, o charleston ouvert, y ride, z shaker,
+// r bord de caisse, b balais, w cloche, t / u toms grave / aigu, x cymbale. sw : swing des doubles-croches impaires.
+// Toutes les 4 mesures, un break de batterie sur le dernier temps (sauf nofill), puis une cymbale.
 const E8 = (v1, v2) => [0, 2, 4, 6, 8, 10, 12, 14].map(k => [k, k % 4 ? v2 : v1]);
+const H16 = (v1, v2) => [...Array(16).keys()].map(k => [k, k % 2 ? v2 : v1]);
+const at = (ks, v) => ks.map(k => [k, v]);
+const QN = [0, 4, 8, 12];
 const STYLES = {
-  ballade: { n: "Ballade (plaqué)", steps: 16, hold: true, C: [[0, 15.5, 1]], B: [[0, 8, 1, "r"], [8, 8, .8, "f"]],
+  // --- Pop / rock
+  ballade: { f: "Pop / rock", n: "Ballade (plaqué)", steps: 16, hold: true, C: [[0, 15.5, 1]], B: [[0, 8, 1, "r"], [8, 8, .8, "f"]],
     k: [[0, .9], [8, .55]], s: [[4, .4], [12, .4]], h: E8(.32, .2) },
-  pop: { n: "Pop (croches)", steps: 16, C: [[0, 1.6, 1], [2, 1.6, .55], [4, 1.6, .8], [6, 1.6, .55], [8, 1.6, .95], [10, 1.6, .55], [12, 1.6, .8], [14, 1.6, .6]],
+  balpiano: { f: "Pop / rock", n: "Ballade piano (arpège)", steps: 16, A: [0, 2, 4, 6, 8, 10, 12, 14].map(k => [k, 7, k % 8 ? .65 : .9]), B: [[0, 16, .9, "r"]],
+    k: [[0, .5]], s: [[8, .3]], h: at(QN, .15), nofill: true },
+  pop: { f: "Pop / rock", n: "Pop (croches)", steps: 16, C: [[0, 1.6, 1], [2, 1.6, .55], [4, 1.6, .8], [6, 1.6, .55], [8, 1.6, .95], [10, 1.6, .55], [12, 1.6, .8], [14, 1.6, .6]],
     B: [[0, 3, 1, "r"], [6, 2, .75, "r"], [8, 3, .9, "r"], [14, 2, .75, "f"]], k: [[0, 1], [6, .55], [8, .9]], s: [[4, .75], [12, .75]], h: E8(.35, .22) },
-  arpege: { n: "Arpège (croches)", steps: 16, A: [0, 2, 4, 6, 8, 10, 12, 14].map(k => [k, 3.5, k % 8 ? .7 : .95]), B: [[0, 16, .95, "r"]],
+  pop16: { f: "Pop / rock", n: "Pop rythmée (grattée)", steps: 16, C: [[0, 1.5, 1, "s"], [3, 1, .6, "uS"], [6, 1.5, .8, "s"], [10, 1, .6, "uS"], [12, 1.5, .85, "s"], [14, 1, .6, "uS"]],
+    B: [[0, 2, 1, "r"], [3, 1, .7, "r"], [6, 2, .85, "r"], [8, 2, .9, "r"], [11, 1, .7, "f"], [14, 2, .8, "o"]], k: [[0, 1], [3, .5], [8, .9], [11, .5]], s: [[4, .8], [12, .8]], h: H16(.3, .15) },
+  rock: { f: "Pop / rock", n: "Rock", steps: 16, C: E8(1, .75).map(([k, v]) => [k, 1.8, v, "u"]), B: E8(1, .85).map(([k, v]) => [k, 1.8, v, "r"]),
+    k: [[0, 1], [8, 1], [10, .7]], s: [[4, 1], [12, 1]], h: E8(.45, .35) },
+  country: { f: "Pop / rock", n: "Country (boum-tchac)", steps: 16, B: [[0, 4, 1, "r"], [8, 4, .95, "f"]], C: [[4, 2, .8, "uS"], [12, 2, .8, "uS"], [14, 1, .5, "u"]],
+    k: [[0, .8], [8, .8]], s: [[4, .55], [12, .55]], h: E8(.25, .15) },
+  reggae: { f: "Pop / rock", n: "Reggae", steps: 16, C: [[4, 1, .85, "u"], [12, 1, .85, "u"]], B: [[0, 3, 1, "r"], [3, 1, .7, "f"], [6, 2, .85, "o"], [10, 4, .9, "r"]],
+    k: [[8, 1]], r: [[8, .7]], h: E8(.25, .2), nofill: true },
+  slowrock: { f: "Pop / rock", n: "Slow rock (12/8)", steps: 12, div: 3, A: [...Array(12).keys()].map(k => [k, 2.5, k % 3 ? .6 : .9]), B: [[0, 6, 1, "r"], [6, 6, .9, "f"]],
+    k: [[0, .9], [6, .7]], s: [[3, .7], [9, .7]], h: at([...Array(12).keys()], .2) },
+  // --- Blues / soul / funk
+  shuffle: { f: "Blues / soul / funk", n: "Shuffle blues", steps: 12, div: 3, C: [0, 3, 6, 9].flatMap(k => [[k, 1.5, k % 6 ? .85 : .8, "u"], [k + 2, 1, .6, "u"]]),
+    B: [[0, 2, 1, "r"], [2, 1, .7, "r"], [3, 2, .9, "3"], [5, 1, .7, "3"], [6, 2, .95, "f"], [8, 1, .7, "f"], [9, 2, .9, "6"], [11, 1, .7, "6"]],
+    k: [[0, 1], [6, .9]], s: [[3, .8], [9, .8]], h: [0, 3, 6, 9].flatMap(k => [[k, .4], [k + 2, .25]]) },
+  soul: { f: "Blues / soul / funk", n: "Soul / Motown", steps: 16, C: [[0, 2, .8, "s"], [4, 2, .7, "s"], [8, 2, .8, "s"], [12, 2, .7, "s"]],
+    B: [[0, 3, 1, "r"], [3, 1, .7, "f"], [4, 2, .85, "o"], [8, 3, .95, "f"], [11, 1, .7, "3"], [12, 2, .85, "r"]],
+    k: [[0, 1], [8, .9], [10, .6]], s: [[4, .9], [12, .9]], c: [[4, .5], [12, .5]], h: E8(.3, .2), z: H16(.15, .1) },
+  funk: { f: "Blues / soul / funk", n: "Funk", steps: 16, C: [[0, .6, 1], [3, .5, .7], [6, .6, .9], [7, .5, .6], [10, .6, .8], [13, .5, .7], [14, .6, .9]].map(x => [...x, "u"]),
+    B: [[0, 1.5, 1, "r"], [2, 1, .8, "o"], [3, 1, .7, "r"], [6, 1, .9, "r"], [7, 1, .8, "o"], [10, 1.5, .9, "r"], [12, 1, .8, "f"], [14, 1, .9, "o"]],
+    k: [[0, 1], [7, .6], [10, .8]], s: [[4, 1], [12, 1], [15, .3]], h: H16(.3, .18) },
+  disco: { f: "Blues / soul / funk", n: "Disco", steps: 16, C: [2, 6, 10, 14].map(k => [k, 1, .8, "u"]),
+    B: E8(1, .9).map(([k, v]) => [k, 1.5, v, k % 4 ? "o" : "r"]), k: at(QN, 1), c: [[4, .8], [12, .8]], o: at([2, 6, 10, 14], .35), h: at([1, 3, 5, 7, 9, 11, 13, 15], .15) },
+  // --- Jazz
+  swing: { f: "Jazz", n: "Jazz swing (walking)", steps: 12, div: 3, C: [[0, 1.5, .8, "u"], [5, 2, .7, "u"]],
+    B: [[0, 3, 1, "r"], [3, 3, .85, "3"], [6, 3, .9, "f"], [9, 3, .85, "6"]],
+    y: [[0, .5], [3, .6], [5, .35], [6, .5], [9, .6], [11, .35]], h: [[3, .3], [9, .3]], k: at([0, 3, 6, 9], .2) },
+  jazzbal: { f: "Jazz", n: "Jazz ballade (balais)", steps: 12, div: 3, hold: true, C: [[0, 11.5, .75]], B: [[0, 6, .9, "r"], [6, 6, .8, "f"]],
+    b: [[0, .5], [3, .4], [5, .25], [6, .5], [9, .4], [11, .25]], nofill: true },
+  valsejazz: { f: "Jazz", n: "Valse jazz", steps: 9, div: 3, C: [[3, 1.5, .7, "u"], [5, 1.5, .6, "u"], [8, 1, .6, "u"]], B: [[0, 3, 1, "r"], [3, 3, .8, "3"], [6, 3, .85, "f"]],
+    y: [[0, .5], [3, .5], [5, .3], [6, .5], [8, .3]], h: [[3, .3], [6, .3]] },
+  // --- Latin
+  bossa: { f: "Latin", n: "Bossa nova", steps: 16, C: [[0, 2, .85], [3, 2, .7], [6, 2, .8], [10, 2, .75], [12, 2, .8]], B: [[0, 5, 1, "r"], [6, 2, .7, "f"], [8, 5, .9, "f"], [14, 2, .7, "r"]],
+    r: [[0, .5], [3, .5], [6, .5], [10, .5], [12, .5]], h: E8(.2, .14), k: [[0, .55], [6, .35], [8, .55], [14, .35]], nofill: true },
+  samba: { f: "Latin", n: "Samba", steps: 16, C: [[0, 1, .8, "u"], [3, 1, .7, "u"], [6, 1, .8, "u"], [8, 1, .7, "u"], [11, 1, .8, "u"], [14, 1, .7, "u"]],
+    B: [[0, 3, 1, "r"], [3, 1, .8, "f"], [4, 3, .9, "f"], [7, 1, .7, "r"], [8, 3, 1, "r"], [11, 1, .8, "f"], [12, 3, .9, "f"], [15, 1, .7, "r"]],
+    k: [[0, .6], [4, 1], [8, .6], [12, 1]], z: [...Array(16).keys()].map(k => [k, k % 4 === 3 ? .45 : .2]), r: [[0, .4], [3, .4], [6, .4], [10, .4], [12, .4]] },
+  salsa: { f: "Latin", n: "Salsa (montuno)", steps: 16, A: [0, 2, 3, 5, 6, 8, 10, 11, 13, 14].map(k => [k, 1.2, k % 4 ? .7 : .9]), ord: [0, .5, 1, .5],
+    B: [[3, 3, 1, "f"], [6, 2, .9, "r"], [11, 3, 1, "f"], [14, 2, .9, "r"]], w: [[0, .4], [4, .3], [8, .4], [12, .3]], r: [[0, .5], [3, .5], [6, .5], [10, .5], [12, .5]], k: [[3, .4], [11, .4]] },
+  tango: { f: "Latin", n: "Tango (habanera)", steps: 16, C: [[0, 1.5, 1], [4, 1.5, .8], [8, 1.5, .9], [12, 1.5, .8]],
+    B: [[0, 3, 1, "r"], [3, 1, .8, "f"], [4, 2, .9, "o"], [6, 2, .8, "f"], [8, 3, 1, "r"], [11, 1, .8, "f"], [12, 2, .9, "o"], [14, 2, .8, "f"]], k: [[0, .6], [8, .6]], nofill: true },
+  // --- Électro / hip-hop
+  house: { f: "Électro / hip-hop", n: "House", steps: 16, C: [2, 6, 10, 14].map(k => [k, 1, .85, "u"]), B: [2, 6, 10, 14].map(k => [k, 1.5, k === 14 ? .9 : .95, k === 14 ? "o" : "r"]),
+    k: at(QN, 1), c: [[4, .7], [12, .7]], o: at([2, 6, 10, 14], .35), h: H16(.12, .12) },
+  electro: { f: "Électro / hip-hop", n: "Électro (arpège)", steps: 16, A: [...Array(16).keys()].map(k => [k, 1, k % 4 ? .6 : .95]), wide: true, up: true,
+    B: [2, 6, 10, 14].map(k => [k, 1.5, .9, "r"]), k: at(QN, .9), c: [[4, .6], [12, .6]], h: H16(.2, .12) },
+  lofi: { f: "Électro / hip-hop", n: "Hip-hop lo-fi", steps: 16, sw: .3, C: [[0, 7.5, .75], [10, 5.5, .65, "u"]], B: [[0, 3, 1, "r"], [7, 1, .7, "r"], [10, 3, .9, "f"]],
+    k: [[0, 1], [7, .7], [10, .9]], s: [[4, .9], [12, .9]], h: H16(.25, .12), nofill: true },
+  ambient: { f: "Électro / hip-hop", n: "Ambiance (arpège lent)", steps: 16, A: [0, 3, 6, 8, 11, 14].map(k => [k, 8, .6]), up: true, wide: true, B: [[0, 16, .7, "r"]], nofill: true },
+  // --- Classique / piano
+  alberti: { f: "Classique / piano", n: "Basse d'Alberti", steps: 16, A: [...Array(16).keys()].map(k => [k, 1.5, k % 4 ? .6 : .85]), ord: [0, 1, .5, 1], B: [[0, 8, .8, "r"], [8, 8, .7, "r"]], nofill: true },
+  arpege: { f: "Classique / piano", n: "Arpège (croches)", steps: 16, A: [0, 2, 4, 6, 8, 10, 12, 14].map(k => [k, 3.5, k % 8 ? .7 : .95]), B: [[0, 16, .95, "r"]],
     k: [[0, .55]], h: [[0, .22], [4, .2], [8, .22], [12, .2]] },
-  arp16: { n: "Arpège rapide (doubles)", steps: 16, A: [...Array(16).keys()].map(k => [k, 2, k % 4 ? .6 : .9]), wide: true, B: [[0, 8, 1, "r"], [8, 8, .85, "r"]],
+  arp16: { f: "Classique / piano", n: "Arpège rapide (doubles)", steps: 16, A: [...Array(16).keys()].map(k => [k, 2, k % 4 ? .6 : .9]), wide: true, B: [[0, 8, 1, "r"], [8, 8, .85, "r"]],
     k: [[0, .75], [8, .6]], s: [[4, .5], [12, .5]], h: E8(.25, .18) },
-  valse: { n: "Valse (3/4)", steps: 12, C: [[4, 3, .7], [8, 3, .65]], B: [[0, 4, 1, "a"]], k: [[0, .7]], h: [[4, .3], [8, .3]] },
-  bossa: { n: "Bossa nova", steps: 16, C: [[0, 2, .85], [3, 2, .7], [6, 2, .8], [10, 2, .75], [12, 2, .8]], B: [[0, 5, 1, "r"], [6, 2, .7, "f"], [8, 5, .9, "f"], [14, 2, .7, "r"]],
-    r: [[0, .5], [3, .5], [6, .5], [10, .5], [12, .5]], h: E8(.2, .14), k: [[0, .55], [6, .35], [8, .55], [14, .35]] },
-  soutien: { n: "Nappe + basse marchée", steps: 16, hold: true, C: [[0, 15.5, .85]], B: [[0, 4, 1, "r"], [4, 4, .8, "r"], [8, 4, .9, "f"], [12, 4, .8, "o"]],
+  arpbris: { f: "Classique / piano", n: "Arpège brisé (pédale)", steps: 16, A: [0, 2, 4, 6, 8, 10, 12, 14].map(k => [k, 10, k ? .7 : .95]), wide: true, up: true, B: [[0, 16, .9, "r"]], nofill: true },
+  choral: { f: "Classique / piano", n: "Choral (noires)", steps: 16, C: QN.map((k, i) => [k, 3.8, [1, .75, .85, .75][i]]), B: [[0, 4, 1, "r"], [4, 4, .8, "3"], [8, 4, .9, "f"], [12, 4, .8, "r"]], nofill: true },
+  // --- Ternaire / nappes
+  valse: { f: "Valses, 6/8 et nappes", n: "Valse (3/4)", steps: 12, C: [[4, 3, .7], [8, 3, .65]], B: [[0, 4, 1, "a"]], k: [[0, .7]], h: [[4, .3], [8, .3]] },
+  ballade68: { f: "Valses, 6/8 et nappes", n: "Ballade 6/8", steps: 6, div: 3, A: [...Array(6).keys()].map(k => [k, 4, k % 3 ? .6 : .9]), B: [[0, 6, 1, "r"]],
+    k: [[0, .6]], s: [[3, .45]], h: at([...Array(6).keys()], .18) },
+  soutien: { f: "Valses, 6/8 et nappes", n: "Nappe + basse marchée", steps: 16, hold: true, C: [[0, 15.5, .85]], B: [[0, 4, 1, "r"], [4, 4, .8, "r"], [8, 4, .9, "f"], [12, 4, .8, "o"]],
     k: [[0, .5], [8, .4]], h: [[4, .2], [12, .2]] },
 };
+const DRUMS = ["k", "s", "c", "h", "o", "y", "z", "r", "b", "w", "t", "u", "x"];
 const acc = { run: false, step: 0, nextT: 0, timer: null, recs: [], arpI: 0, bar: 0, vel: 0.8, lastC: { T: -9, k: 0 } };
-const stepDur = () => 60 / S.bpm / 4;
 const style = () => STYLES[S.style] || STYLES.pop;
+const stepDur = () => 60 / S.bpm / (style().div || 4);
 // Batterie de synthèse, douce : rien à charger.
 function drum(kind, T, v) {
   noiseBuf();
   const g = ac.createGain(); g.connect(busDrum); g.gain.setValueAtTime(0, T);
-  const env = (peak, dec) => { g.gain.linearRampToValueAtTime(peak, T + 0.002); g.gain.setTargetAtTime(0, T + 0.004, dec / 3); };
-  const noise = (type, f, q) => { const s = ac.createBufferSource(); s.buffer = NOISE; const fl = ac.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; s.connect(fl); fl.connect(g); s.start(T, Math.random() * 0.5); s.stop(T + 0.6); };
-  if (kind === "k") { const o = ac.createOscillator(); o.frequency.setValueAtTime(150, T); o.frequency.exponentialRampToValueAtTime(48, T + 0.12); o.connect(g); o.start(T); o.stop(T + 0.5); env(v * 1.1, 0.32); }
-  else if (kind === "s") { noise("bandpass", 1900, 0.7); const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = 190; const og = ac.createGain(); og.gain.value = 0.6; o.connect(og); og.connect(g); o.start(T); o.stop(T + 0.2); env(v * 0.7, 0.15); }
+  const env = (peak, dec, att = 0.002) => { g.gain.linearRampToValueAtTime(peak, T + att); g.gain.setTargetAtTime(0, T + att + 0.002, dec / 3); };
+  const noise = (type, f, q, dur = 0.6) => { const s = ac.createBufferSource(); s.buffer = NOISE; const fl = ac.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; s.connect(fl); fl.connect(g); s.start(T, Math.random() * 0.4); s.stop(T + dur); };
+  const osc = (type, f0, f1, dur, gain = 1) => { const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, T); if (f1) o.frequency.exponentialRampToValueAtTime(f1, T + dur * 0.4); const og = ac.createGain(); og.gain.value = gain; o.connect(og); og.connect(g); o.start(T); o.stop(T + dur); };
+  let life = 0.7;
+  if (kind === "k") { osc("sine", 150, 48, 0.5); env(v * 1.1, 0.32); }
+  else if (kind === "s") { noise("bandpass", 1900, 0.7); osc("triangle", 190, 0, 0.2, 0.6); env(v * 0.7, 0.15); }
+  else if (kind === "c") { noise("bandpass", 1300, 1.2); env(v * 0.8, 0.13); }
   else if (kind === "h") { noise("highpass", 7500, 0.5); env(v * 0.45, 0.045); }
   else if (kind === "o") { noise("highpass", 7000, 0.5); env(v * 0.4, 0.25); }
-  else if (kind === "r") { noise("bandpass", 2600, 4); const o = ac.createOscillator(); o.frequency.value = 1700; o.connect(g); o.start(T); o.stop(T + 0.05); env(v * 0.5, 0.03); }
-  setTimeout(() => g.disconnect(), (T - ac.currentTime + 1) * 1000);
+  else if (kind === "y") { noise("bandpass", 5200, 1.5, 1); osc("sine", 3150, 0, 0.6, 0.15); env(v * 0.35, 0.4); life = 1.2; }
+  else if (kind === "z") { noise("bandpass", 6500, 2); env(v * 0.35, 0.06, 0.015); }
+  else if (kind === "r") { noise("bandpass", 2600, 4); osc("sine", 1700, 0, 0.05); env(v * 0.5, 0.03); }
+  else if (kind === "b") { noise("bandpass", 3000, 0.5); env(v * 0.3, 0.18, 0.035); }
+  else if (kind === "w") { osc("square", 560, 0, 0.3, 0.5); osc("square", 845, 0, 0.3, 0.5); env(v * 0.22, 0.09); }
+  else if (kind === "t") { osc("sine", 120, 80, 0.5); env(v * 0.9, 0.3); }
+  else if (kind === "u") { osc("sine", 190, 130, 0.4); env(v * 0.8, 0.25); }
+  else if (kind === "x") { noise("highpass", 4000, 0.5, 2); env(v * 0.4, 1.3); life = 2.2; }
+  setTimeout(() => g.disconnect(), (T - ac.currentTime + life) * 1000);
 }
-// La basse : la note de basse de l'accord (son renversement s'il en a un), entre Mi2 et Ré♯3 (le haut-parleur du téléphone).
+// La basse : la note de basse de l'accord (son renversement s'il en a un), entre Mi2 et Ré♯3 (le haut-parleur du téléphone) ;
+// les autres degrés se comptent depuis la fondamentale (tierce et septième d'après le type d'accord).
 function bassNote(c, deg) {
   const pc = (c.pc + (c.b || 0)) % 12, n = 40 + ((pc - 4 + 12) % 12);
-  return deg === "f" ? (n + 7 > 52 ? n - 5 : n + 7) : deg === "o" ? n + 12 : n;
+  if (deg === "r" || !deg) return n;
+  const root = 40 + ((c.pc - 4 + 12) % 12), tones = D.types[c.t].tones.map(x => x[0] % 12);
+  const third = tones.find(x => x === 3 || x === 4) ?? (tones.includes(5) ? 5 : 4);
+  const sev = tones.find(x => x === 10 || x === 11 || x === 9) ?? 12;
+  const fifth = tones.find(x => x === 7 || x === 6 || x === 8) ?? 7;
+  let m = root + ({ f: fifth, o: 12, "3": third, "6": tones.includes(8) && !tones.includes(9) ? 8 : 9, "7": sev }[deg] ?? 0);
+  if (deg === "o") m = n + 12;
+  while (m > 55) m -= 12;
+  return m;
 }
 function accNote(n, vel, id, bus, T, gate, part, k) {
   const v = play(n, vel, id, bus, false, T);
@@ -1441,21 +1526,39 @@ function accNote(n, vel, id, bus, T, gate, part, k) {
 }
 // Les notes d'un pas de la mesure, pour l'accord en cours ; noDrums : on rejoue un pas déjà programmé (l'accord a changé).
 function schedStep(k, T, noDrums) {
-  const st = style(), sd = stepDur(), vel = acc.vel;
-  if (!noDrums && S.drums) for (const kind of ["k", "s", "h", "o", "r"]) for (const [ks, v] of st[kind] || []) if (ks === k) drum(kind, T, v * (0.6 + 0.4 * vel));
-  if (!noDrums && k % 4 === 0) { const beat = k / 4 + 1; setTimeout(() => showBeat(beat), Math.max(0, (T - ac.currentTime) * 1000)); }
+  const st = style(), sd = stepDur(), vel = acc.vel, div = st.div || 4;
+  if (st.sw && k % 2 === 1) T += st.sw * sd;
+  if (!noDrums && S.drums) {
+    const hasKit = DRUMS.some(d => st[d] && st[d].length);
+    const fillBar = hasKit && !st.nofill && S.fills && acc.bar % 4 === 3 && k >= st.steps - div;
+    if (fillBar) {
+      const i = k - (st.steps - div), seq = div === 3 ? ["s", "u", "t"] : ["s", "s", "u", "t"];
+      drum(seq[i], T, (0.55 + 0.12 * i) * (0.6 + 0.4 * vel));
+      if (i === 0) drum("k", T, 0.6 * (0.6 + 0.4 * vel));
+    } else {
+      for (const kind of DRUMS) for (const [ks, v] of st[kind] || []) if (ks === k) drum(kind, T, v * (0.6 + 0.4 * vel));
+      if (hasKit && !st.nofill && S.fills && k === 0 && acc.bar > 0 && acc.bar % 4 === 0) drum("x", T, 0.55 * (0.6 + 0.4 * vel));
+    }
+  }
+  if (!noDrums && k % div === 0) { const beat = k / div + 1; setTimeout(() => showBeat(beat), Math.max(0, (T - ac.currentTime) * 1000)); }
   if (!cur) return;
   const notes = chordNotes(cur), per = Math.min(1, 2.2 / Math.sqrt(notes.length));
-  for (const [ks, gl, a] of st.C || []) if (ks === k) {
-    notes.forEach((n, i) => accNote(n, (i === 0 ? 0.8 : 1) * a * vel * per, S.tPad, busPad, T, gl * sd, "C", k));
+  for (const [ks, gl, a, opt = ""] of st.C || []) if (ks === k) {
+    let ns = opt.includes("u") && notes.length > 2 ? notes.slice(1) : notes;
+    // Gratté : les notes partent l'une après l'autre (12 ms), vers l'aigu (s) ou vers le grave (S).
+    const strum = opt.includes("s") ? 1 : opt.includes("S") ? -1 : 0;
+    const order = strum < 0 ? [...ns].reverse() : ns;
+    order.forEach((n, i) => accNote(n, (n === notes[0] ? 0.8 : 1) * a * vel * per, S.tPad, busPad, T + (strum ? i * 0.012 : 0), gl * sd, "C", k));
     acc.lastC = { T, k };
   }
   for (const [ks, gl, a] of st.A || []) if (ks === k) {
-    // L'arpège : les notes de l'accord sans la basse, en montant puis en descendant (sur deux octaves pour le rapide).
+    // L'arpège : les notes de l'accord sans la basse (sur deux octaves si wide), en montant puis en redescendant,
+    // ou en montant seulement (up), ou dans un ordre donné (ord : Alberti grave-aigu-milieu-aigu, montuno…).
     let up = notes.slice(1); if (!up.length) up = notes;
     if (st.wide) up = [...up, ...up.map(n => n + 12)];
-    const seq = up.length > 2 ? [...up, ...up.slice(1, -1).reverse()] : up;
-    accNote(seq[acc.arpI++ % seq.length], a * vel * 0.85, S.tPad, busPad, T, gl * sd, "A", k);
+    const seq = st.ord ? st.ord.map(f => up[Math.round(f * (up.length - 1))]) : st.up || up.length <= 2 ? up : [...up, ...up.slice(1, -1).reverse()];
+    const idx = st.ord ? st.A.findIndex(x => x[0] === k) : acc.arpI++;
+    accNote(seq[idx % seq.length], a * vel * 0.85, S.tPad, busPad, T, gl * sd, "A", k);
     if (k === 0) acc.lastC = { T, k };
   }
   if (S.bassOn) for (const [ks, gl, a, deg] of st.B || []) if (ks === k) {
@@ -1512,7 +1615,7 @@ function chordPlay(c, cv) { if (S.accOn) accChord(c, cv); else playChord(c, cv);
 function showBeat(b) {
   const el = $("accBtn"); if (!el) return;
   if (!acc.run || !b) { renderAcc(); return; }
-  const n = style().steps / 4;
+  const n = style().steps / (style().div || 4);
   el.textContent = "⏸ " + [...Array(n).keys()].map(i => i + 1 === b ? "●" : "○").join("");
   el.classList.toggle("beat1", b === 1);
 }
@@ -1522,7 +1625,10 @@ function renderAcc() {
   if (!acc.run) { el.textContent = S.accOn ? "● prêt" : "▶"; el.classList.remove("beat1"); }
   $("accStyle").textContent = style().n + " ▾";
   $("bpmLbl").textContent = S.bpm + " bpm";
-  $("accStyles").innerHTML = Object.entries(STYLES).map(([k, x]) => `<button class="pill ${S.style === k ? "on" : ""}" data-sty="${k}">${x.n}</button>`).join("");
+  const fams = [...new Set(Object.values(STYLES).map(x => x.f))];
+  $("accStyles").innerHTML = fams.map(f => `<div class="lbl" style="margin-top:4px">${f}</div><div class="chips">${Object.entries(STYLES).filter(([, x]) => x.f === f)
+    .map(([k, x]) => `<button class="pill ${S.style === k ? "on" : ""}" data-sty="${k}">${x.n}</button>`).join("")}</div>`).join("");
+  $("fillsBtn").textContent = S.fills ? "Breaks toutes les 4 mesures ✓" : "Breaks toutes les 4 mesures"; $("fillsBtn").classList.toggle("on", S.fills);
   $("bassOnBtn").textContent = S.bassOn ? "Basse ✓" : "Basse"; $("bassOnBtn").classList.toggle("on", S.bassOn);
   $("drumsBtn").textContent = S.drums ? "Batterie ✓" : "Batterie"; $("drumsBtn").classList.toggle("on", S.drums);
   $("tBass").textContent = "Son : " + soundName(S.tBass) + sfStatus(S.tBass);
@@ -1541,6 +1647,7 @@ $("accBox").addEventListener("click", e => {
   if (b) { S.style = b.dataset.sty; if (acc.step >= style().steps) acc.step = 0; save(); renderAcc(); }
 });
 $("bassOnBtn").onclick = () => { S.bassOn = !S.bassOn; save(); renderAcc(); };
+$("fillsBtn").onclick = () => { S.fills = !S.fills; save(); renderAcc(); };
 $("drumsBtn").onclick = () => { S.drums = !S.drums; save(); renderAcc(); };
 $("tBass").onclick = () => { $("accBox").style.display = "none"; openSounds("bass"); };
 $("vBass").oninput = e => { S.vBass = +e.target.value; mix(); save(); };
