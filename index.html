@@ -240,7 +240,7 @@
   <div class="lbl" style="line-height:1.4">Active ▶ puis touche un accord : le rythme part sur ce toucher et joue toujours l'accord en cours. Change d'accord quand tu veux (un peu avant le temps, il tombe pile dessus). ⏹ arrête tout.</div>
   <div id="accStyles" style="display:flex;flex-direction:column;gap:4px"></div>
   <div class="lbl">Basse et batterie</div>
-  <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="drumsBtn"></button><button class="pill" id="fillsBtn"></button></div>
+  <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="bassUpBtn"></button><button class="pill" id="drumsBtn"></button><button class="pill" id="fillsBtn"></button></div>
   <div class="row"><span class="lbl">Basse</span><input type="range" id="vBass" min="0" max="100"><span class="lbl">Batterie</span><input type="range" id="vDrum" min="0" max="100"></div>
   <div class="lbl">Les accords du rythme prennent le son des accords (et le curseur « Accords »).</div>
 </div></div>
@@ -266,6 +266,7 @@ if (!S.tBass) S.tBass = "hq:basseelec";
 if (S.bassOn == null) S.bassOn = true;
 if (S.drums == null) S.drums = true;
 if (S.fills == null) S.fills = true;
+if (S.bassUp == null) S.bassUp = true;
 if (S.vBass == null) S.vBass = 70;
 if (S.vDrum == null) S.vDrum = 70;
 S.accOn = false;
@@ -274,7 +275,7 @@ const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S));
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "fills", "vBass", "vDrum", "keysMode", "stack"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "fills", "bassUp", "vBass", "vDrum", "keysMode", "stack"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -407,7 +408,7 @@ function audio() {
   busBass = ac.createGain(); busDrum = ac.createGain(); busBass.connect(busAcc); busDrum.connect(busAcc); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
   mix(); preload();
 }
-function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 2; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
+function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 4; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
   const chOf = id => (SOUNDS[id] && SOUNDS[id].ch) || 0;
   chPad.gain.value = busPad.gain.value * chOf(S.tPad) * 0.8; chSolo.gain.value = busSolo.gain.value * chOf(S.tSolo) * 0.8;
   boost.gain.value = 1 + 3 * Math.pow(S.vMax / 100, 1.3); }
@@ -1563,7 +1564,10 @@ function schedStep(k, T, noDrums) {
   }
   if (S.bassOn) for (const [ks, gl, a, deg] of st.B || []) if (ks === k) {
     const d = deg === "a" ? (acc.bar % 2 ? "f" : "r") : deg;
-    accNote(bassNote(cur, d), a * (0.55 + 0.45 * vel), S.tBass, busBass, T, gl * sd * 0.95, "B", k);
+    const bn = bassNote(cur, d), bv = a * (0.55 + 0.45 * vel);
+    accNote(bn, bv, S.tBass, busBass, T, gl * sd * 0.95, "B", k);
+    // Basse renforcée : la même note une octave plus haut, discrète, que le haut-parleur du téléphone rend bien.
+    if (S.bassUp) accNote(bn + 12, bv * 0.45, S.tBass, busBass, T, gl * sd * 0.95, "B", k);
   }
 }
 function accTick() {
@@ -1608,7 +1612,8 @@ function accChord(c, cv) {
     const toEnd = (st.steps - acc.step) * sd + Math.max(0, acc.nextT - now);
     const notes = chordNotes(c), per = Math.min(1, 2.2 / Math.sqrt(notes.length));
     notes.forEach((n, i) => accNote(n, (i === 0 ? 0.8 : 1) * acc.vel * per * 0.85, S.tPad, busPad, now + 0.005, toEnd, "C", -1));
-    if (S.bassOn) accNote(bassNote(c, "r"), 0.8 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1);
+    if (S.bassOn) { const bn = bassNote(c, "r"); accNote(bn, 0.8 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1);
+      if (S.bassUp) accNote(bn + 12, 0.36 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1); }
   }
 }
 function chordPlay(c, cv) { if (S.accOn) accChord(c, cv); else playChord(c, cv); }
@@ -1631,6 +1636,7 @@ function renderAcc() {
   $("fillsBtn").textContent = S.fills ? "Breaks toutes les 4 mesures ✓" : "Breaks toutes les 4 mesures"; $("fillsBtn").classList.toggle("on", S.fills);
   $("bassOnBtn").textContent = S.bassOn ? "Basse ✓" : "Basse"; $("bassOnBtn").classList.toggle("on", S.bassOn);
   $("drumsBtn").textContent = S.drums ? "Batterie ✓" : "Batterie"; $("drumsBtn").classList.toggle("on", S.drums);
+  $("bassUpBtn").textContent = S.bassUp ? "Basse renforcée ✓" : "Basse renforcée"; $("bassUpBtn").classList.toggle("on", S.bassUp);
   $("tBass").textContent = "Son : " + soundName(S.tBass) + sfStatus(S.tBass);
   $("vBass").value = S.vBass; $("vDrum").value = S.vDrum;
 }
@@ -1647,6 +1653,7 @@ $("accBox").addEventListener("click", e => {
   if (b) { S.style = b.dataset.sty; if (acc.step >= style().steps) acc.step = 0; save(); renderAcc(); }
 });
 $("bassOnBtn").onclick = () => { S.bassOn = !S.bassOn; save(); renderAcc(); };
+$("bassUpBtn").onclick = () => { S.bassUp = !S.bassUp; save(); renderAcc(); };
 $("fillsBtn").onclick = () => { S.fills = !S.fills; save(); renderAcc(); };
 $("drumsBtn").onclick = () => { S.drums = !S.drums; save(); renderAcc(); };
 $("tBass").onclick = () => { $("accBox").style.display = "none"; openSounds("bass"); };
