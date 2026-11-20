@@ -111,6 +111,7 @@
       <span class="tag" style="color:var(--accent)">SOLO</span>
       <span class="title grow" id="scaleTitle"></span>
       <button class="pill" id="tSolo"></button>
+      <button class="pill" id="pedBtn"></button>
       <button class="pill" id="octDn">−</button>
       <span class="lbl" id="octLbl"></span>
       <button class="pill" id="octUp">+</button>
@@ -179,12 +180,13 @@ if (S.vMax == null) S.vMax = 60;
 if (/^hq:mello/.test(S.tPad)) S.tPad = "nchaude";
 if (/^hq:mello/.test(S.tSolo)) S.tSolo = "bfeutre";
 if (S.aft == null) S.aft = true;
+if (S.ped == null) S.ped = true;
 if (!S.touchMode) S.touchMode = S.fixe ? "fixe" : "frappe";
 const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S)); } catch (e) {} mirrorSoon(); };
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "keysMode", "stack"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "keysMode", "stack"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -654,9 +656,8 @@ function sampleVoice(n, vel, name, bus) {
   s.connect(lp); lp.connect(out);
   if (pan) { pan.pan.value = Math.max(-0.5, Math.min(0.5, (n - 64) / 40)); out.connect(pan); pan.connect(bus); } else out.connect(bus);
   s.start(t0);
-  const rel = g[4];
-  return { stop() {
-    const t = ac.currentTime;
+  return { stop(r) {
+    const t = ac.currentTime, rel = r || g[4];
     out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
     out.gain.setTargetAtTime(0, t, rel / 4);
     try { s.stop(t + rel * 1.8 + 0.05); } catch (e) {}
@@ -754,8 +755,8 @@ function sfVoice(n, vel, id, bus) {
   let stopped = false;
   return {
     reLayer(nv) { if (stopped) return; const t = ac.currentTime; out.gain.cancelScheduledValues(t); out.gain.setTargetAtTime(lvl(nv), t, 0.006); },
-    stop() {
-      stopped = true; const t = ac.currentTime, rel = I.r;
+    stop(r) {
+      stopped = true; const t = ac.currentTime, rel = r || I.r;
       out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t); out.gain.setTargetAtTime(0, t, rel / 4);
       srcs.forEach(s => { try { s.stop(t + rel * 1.8 + 0.05); } catch (e) {} });
       setTimeout(() => out.disconnect(), (rel * 1.8 + 0.3) * 1000);
@@ -788,7 +789,6 @@ function hqVoice(n, vel, id, bus) {
   };
   let cur = src(r, t0), curR = r, curV = vel;
   cur.sg.gain.setValueAtTime(0, t0); cur.sg.gain.linearRampToValueAtTime(cur.gain * lvl(vel) * 0.9, t0 + 0.004);
-  const rel = I.r;
   let stopped = false;
   return {
     // La force corrigée quelques ms après le toucher : si elle tombe dans une autre nuance enregistrée,
@@ -807,9 +807,9 @@ function hqVoice(n, vel, id, bus) {
       }
       curV = nv;
     },
-    stop() {
+    stop(r) {
       stopped = true;
-      const t = ac.currentTime;
+      const t = ac.currentTime, rel = r || I.r;
       out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(1, t); out.gain.setTargetAtTime(0, t, rel / 4);
       try { cur.s.stop(t + rel * 1.8 + 0.05); } catch (e) {}
       setTimeout(() => { out.disconnect(); pan && pan.disconnect(); }, (rel * 1.8 + 0.3) * 1000);
@@ -849,14 +849,17 @@ const play = (n, vel, id, bus, withMod) => {
     vg.connect(dl); dl.connect(sw); sw.connect(bus);
     // 0,0009 s d'amplitude à 5,5 Hz ≈ ±50 cents (un vibrato large) au maximum.
     mod = { set(a) { const t = ac.currentTime; lg.gain.setTargetAtTime(a * 0.0009, t, 0.06); sw.gain.setTargetAtTime(1 + 0.25 * a, t, 0.08); },
-      end() { setTimeout(() => { try { lfo.stop(); } catch (e) {} lfo.disconnect(); sw.disconnect(); }, 4000); } };
+      end(ms) { setTimeout(() => { try { lfo.stop(); } catch (e) {} lfo.disconnect(); sw.disconnect(); }, ms || 4000); } };
   } else vg.connect(bus);
   const v = id.startsWith("hq:") && HQ[id.slice(3)] ? hqVoice(n, vel, id.slice(3), vg)
     : id.startsWith("gm:") && GMI[id.slice(3)] ? sampleVoice(n, vel, id.slice(3), vg) : voice(n, vel, id, vg);
   // r = nouvelle force / force de départ ; un instrument à nuances enregistrées change d'enregistrement s'il le faut.
   v.setVel = v.reLayer ? (r => v.reLayer(Math.min(1, vel * r))) : (r => vg.gain.setTargetAtTime(Math.pow(Math.max(0.05, r), 1.5), ac.currentTime, 0.006));
   v.mod = a => mod && mod.set(a);
-  if (mod) { const st = v.stop; v.stop = () => { st(); mod.end(); }; }
+  // Un son qui s'éteint tout seul (piano, harpe, percussions…) : la pédale peut le laisser résonner après le doigt levé.
+  v.decays = id.startsWith("hq:") ? !!HQ[id.slice(3)] && !HQ[id.slice(3)].m && !HQ[id.slice(3)].s
+    : id.startsWith("gm:") ? !!GMI[id.slice(3)] && !GMI[id.slice(3)][3] : false;
+  if (mod) { const st = v.stop; v.stop = r => { st(r); mod.end(r ? (r * 1.8 + 0.5) * 1000 : 4000); }; }
   return v;
 };
 const soundName = id => id.startsWith("hq:") ? (HQ[id.slice(3)] || { n: "?" }).n : id.startsWith("gm:") ? (GMI[id.slice(3)] || [, "?"])[1] : (SOUNDS[id] || SOUNDS.carre).name;
@@ -877,6 +880,7 @@ let chordVoices = [];
 function playChord(c, cv = 0.85) {
   audio();
   chordVoices.forEach(v => v.stop());
+  pedOff();
   // L'accord autour de Fa3–Fa♯4, la basse une octave dessous : assez haut pour le haut-parleur du téléphone.
   const base = 60 + c.pc - (c.pc >= 7 ? 12 : 0) + 12 * (S.octPad || 0);
   // Un accord importé (Scaler) garde son voicing exact : mêmes notes, même registre, d'un accord à l'autre.
@@ -903,6 +907,7 @@ function render() {
   const op = S.octPad || 0; $("octPadLbl").textContent = `oct. ${op > 0 ? "+" : ""}${op}`;
   $("touch").textContent = { frappe: "Frappe", pos: "Position ↓", fixe: "Force fixe" }[S.touchMode]; $("touch").classList.toggle("on", S.touchMode !== "fixe");
   $("velInfo").textContent = S.touchMode === "frappe" ? (lastInfo || (S.cal ? `étalonné : ${FEATNAME[S.cal.f]}` : "touche « Étalonner »")) : S.touchMode === "pos" ? "bas de la touche = fort" : "";
+  $("pedBtn").textContent = S.ped ? "Pédale ✓" : "Pédale"; $("pedBtn").classList.toggle("on", !!S.ped);
   $("aftBtn").textContent = S.aft ? "Vibrato : glisser" : "Vibrato : non"; $("aftBtn").classList.toggle("on", !!S.aft);
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev; $("vMax").value = S.vMax;
   // gamme
@@ -1148,13 +1153,23 @@ function finishCal() {
 }
 $("calBtn").onclick = startCal;
 $("calBox").addEventListener("click", e => { if (e.target.id === "calClose") { calib = null; $("calBox").style.display = "none"; } });
+// Pédale (solo) : un son qui s'éteint seul (piano…) continue de résonner, doigt levé, jusqu'à sa fin naturelle.
+// Rejouer la même note étouffe la précédente (comme la corde qu'on refrappe) ; changer d'accord « relève la pédale ».
+const PED_REL = 12;            // relâche très lente : c'est l'échantillon lui-même qui fait décroître la note
+let pedalled = [];
+const pedOff = n => { pedalled = pedalled.filter(p => { if (n == null || p.n === n) { p.v.stop(0.3); return false; } return true; }); };
+function soloRelease(f) {
+  if (S.ped && f.v.decays) { f.v.stop(PED_REL); pedalled.push({ n: f.n, v: f.v }); if (pedalled.length > 40) pedalled.shift().v.stop(0.3); }
+  else f.v.stop();
+}
 function fingerTo(id, el, y, e) {
   const f = fingers.get(id);
   const n = el ? +el.dataset.n : null;
   if (f && f.n === n) return;
-  if (f) { f.v.stop(); fingers.delete(id); }
+  if (f) { soloRelease(f); fingers.delete(id); }
   if (n !== null) {
     audio();
+    pedOff(n);
     // En glissant d'une touche à l'autre, la note suivante garde la force de la première.
     const vel = f ? f.vel : touchVel(el, y, e);
     if (e) e.__vel = vel;
@@ -1175,7 +1190,7 @@ function clearStale(e) {
   if (chordPointer !== null && !S.hold) { chordPointer = null; stopChord(); }
 }
 document.addEventListener("pointerdown", clearStale, true);
-window.addEventListener("blur", () => { fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); if (!S.hold) { chordPointer = null; stopChord(); } });
+window.addEventListener("blur", () => { pedOff(); fingers.forEach(f => f.v.stop()); fingers.clear(); lightPads(); if (!S.hold) { chordPointer = null; stopChord(); } });
 padsEl.addEventListener("pointerdown", e => { e.preventDefault(); padsEl.releasePointerCapture?.(e.pointerId); fingerTo(e.pointerId, padAt(e.clientX, e.clientY), e.clientY, e);
   const f = fingers.get(e.pointerId); if (f) glideLog.set(e.pointerId, { notes: [f.n], moves: 0, t0: performance.now() }); });
 // Modulation (vibrato) d'une note tenue. Ce téléphone n'envoie aucun événement tant que le doigt ne bouge pas : la
@@ -1307,6 +1322,7 @@ $("sounds").addEventListener("click", e => {
   }
   if (e.target === $("sounds") || e.target.id === "soundOk" || e.target.id === "soundOk2") $("sounds").style.display = "none";
 });
+$("pedBtn").onclick = () => { S.ped = !S.ped; if (!S.ped) pedOff(); save(); render(); };
 $("aftBtn").onclick = () => { S.aft = !S.aft; save(); render(); };
 $("touch").onclick = () => { S.touchMode = { frappe: "pos", pos: "fixe", fixe: "frappe" }[S.touchMode]; lastInfo = ""; save(); render(); };
 // Octave des accords : −2 à +2 ; un accord qui sonne encore est rejoué à la nouvelle hauteur.
@@ -1361,7 +1377,7 @@ $("over").addEventListener("click", e => {
 });
 $("start").addEventListener("pointerdown", () => { audio(); ac.resume(); $("start").remove(); });
 for (const id of [S.tSolo, S.tPad]) if (id.startsWith("gm:") && GMI[id.slice(3)]) sfLoad(S.bank, id.slice(3));
-document.addEventListener("visibilitychange", () => { if (document.hidden) { stopChord(); fingers.forEach(f => f.v.stop()); fingers.clear(); } });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { pedOff(); stopChord(); fingers.forEach(f => f.v.stop()); fingers.clear(); } });
 render();
 </script>
 </body>
