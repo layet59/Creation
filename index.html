@@ -79,6 +79,10 @@
     .chords .c, .chords.many .c { grid-column:auto !important; height:auto !important; writing-mode:vertical-rl; text-orientation:sideways; direction:ltr; }
     .chords .c b { max-width:none; max-height:96%; }
     /* Cases courtes (écran bas) : noms plus petits, pour qu'ils tiennent en entier. */
+    .chords .c b { font-size:min(19px, calc(min(104px, (100vh - 430px) / 4) / 4.6)); }
+    .chords .c b.mid { font-size:min(17px, calc(min(104px, (100vh - 430px) / 4) / 5.8)); }
+    .chords .c b.long { font-size:min(15px, calc(min(104px, (100vh - 430px) / 4) / 7.8)); }
+    .chords .c b.xlong { font-size:min(13px, calc(min(104px, (100vh - 430px) / 4) / 9.6)); }
     .chords.many .c b { font-size:min(17px, calc((100vh - 430px) / 4 / 5.2)); }
     .chords.many .c b.mid { font-size:min(15px, calc((100vh - 430px) / 4 / 6.4)); }
     .chords.many .c b.long { font-size:min(13px, calc((100vh - 430px) / 4 / 8.8)); }
@@ -100,6 +104,45 @@
     .chords.many .c small { font-size:8.5px; }
     #app { overflow-y:auto; }
   }
+  /* ---- Jeu en direct ---- */
+  #combos .pill, #secs .pill { flex-shrink:0; }
+  #combos .pill.cmb { background:rgba(245,179,66,.16); }
+  #combos .pill.cmb.on { background:rgba(245,179,66,.85); color:#1a1205; }
+  #combos .pill.del { background:rgba(229,83,75,.55); }
+  #secs .pill { font-size:13px; padding:7px 14px; }
+  #sceneBtn.on { background:rgba(245,179,66,.85); color:#1a1205; }
+  #pedPadBtn, #hold { flex-shrink:0; }
+  /* Pas à pas : une seule grande zone ; chaque toucher joue l'accord suivant de la suite. */
+  #stepZone { display:none; height:150px; border-radius:16px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.1);
+    background-image:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(0,0,0,.25));
+    flex-direction:column; align-items:center; justify-content:center; gap:4px; touch-action:none; }
+  #stepZone.flash { background-color:rgba(74,144,217,.55); border:2px solid rgba(245,179,66,.95); }
+  #stepZone small { font:700 13px system-ui; color:var(--accent); } #stepZone.flash small { color:#fff; }
+  #stepZone b { font:800 30px system-ui; white-space:nowrap; }
+  .stepping #stepZone { display:flex; } .stepping #chords, .stepping #vars, .stepping #secs { display:none !important; }
+  /* Mode scène : seuls restent les accords, le solo, les combinaisons de sons et les commandes du jeu. */
+  .scene #scales, .scene #keysMode, .scene #tSolo, .scene #octDn, .scene #octLbl, .scene #octUp, .scene .keyrow,
+  .scene #vars, .scene #tPad, .scene #octPadDn, .scene #octPadLbl, .scene #octPadUp, .scene .setrow,
+  .scene #combos .edit, .scene #combos .del, .scene #chordTitle, .scene #scaleTitle { display:none !important; }
+  .scene .acc .row .grow { flex:1; }
+  .scene .c { height:84px; } .scene .c b { font-size:20px; }
+  .scene #stepZone { height:240px; } .scene #stepZone b { font-size:40px; }
+  @media (orientation: portrait) {
+    .scene .chords.many .c { height:56px; }
+    .scene .c b.mid { font-size:17px; } .scene .c b.long { font-size:14px; } .scene .c b.xlong { font-size:12px; }
+  }
+  @media (orientation: landscape) {
+    #stepZone { height:calc(100vh - 330px); min-height:150px; }
+    #stepZone b, #stepZone small { writing-mode:vertical-rl; text-orientation:sideways; }
+    #stepZone { flex-direction:row-reverse; }
+    .scene #stepZone { height:calc(100vh - 175px); }
+    .scene .chords { grid-template-rows:repeat(4, clamp(64px, calc((100vh - 215px) / 4), 190px)); }
+    .scene .chords.many { grid-template-rows:repeat(4, clamp(64px, calc((100vh - 215px) / 4), 190px)); }
+    .scene .chords .c b { font-size:min(26px, calc((100vh - 215px) / 4 / 5.2)); }
+    .scene .chords.many .c b.mid, .scene .chords .c b.mid { font-size:min(22px, calc((100vh - 215px) / 4 / 6.4)); }
+    .scene .chords.many .c b.long, .scene .chords .c b.long { font-size:min(19px, calc((100vh - 215px) / 4 / 8.8)); }
+    .scene .chords.many .c b.xlong, .scene .chords .c b.xlong { font-size:min(17px, calc((100vh - 215px) / 4 / 10.6)); }
+  }
 </style>
 </head>
 <body>
@@ -119,15 +162,21 @@
     <div class="scroller" id="scales"></div>
     <div class="scroller" id="keysMode"></div>
   </div>
-  <div class="row">
+  <div class="row keyrow">
     <button class="pill on" id="keyBtn"></button>
     <span id="stacks" class="scroller grow"></span>
+  </div>
+  <!-- Mode scène (cache tout ce qui ne sert pas en jouant) et combinaisons de sons en un toucher. -->
+  <div class="row">
+    <button class="pill" id="sceneBtn"></button>
+    <span id="combos" class="scroller grow"></span>
   </div>
   <div class="card acc">
     <div class="row">
       <span class="tag" style="color:var(--gold)">ACCORDS</span>
       <span class="title grow" id="chordTitle"></span>
       <button class="pill" id="hold"></button>
+      <button class="pill" id="pedPadBtn"></button>
       <button class="pill" id="tPad"></button>
       <button class="pill" id="stop">⏹</button>
     </div>
@@ -135,16 +184,18 @@
       <button class="pill" id="octPadDn">−</button>
       <span class="lbl" id="octPadLbl"></span>
       <button class="pill" id="octPadUp">+</button></div>
+    <div class="scroller" id="secs"></div>
     <div class="scroller vars" id="vars"></div>
     <div class="chords" id="chords"></div>
+    <div id="stepZone"><small id="stepNum"></small><b id="stepName"></b><span class="lbl" id="stepHint"></span></div>
   </div>
-  <div class="row"><span class="lbl">Toucher</span><button class="pill" id="touch"></button><span class="lbl grow" id="velInfo" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span><button class="pill" id="aftBtn"></button><button class="pill" id="calBtn">Étalonner</button></div>
-  <div class="row">
+  <div class="row setrow"><span class="lbl">Toucher</span><button class="pill" id="touch"></button><span class="lbl grow" id="velInfo" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span><button class="pill" id="aftBtn"></button><button class="pill" id="calBtn">Étalonner</button></div>
+  <div class="row setrow">
     <span class="lbl">Accords</span><input type="range" id="vPad" min="0" max="100">
     <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="100">
     <span class="lbl">Réverb</span><input type="range" id="vRev" min="0" max="100">
   </div>
-  <div class="row"><span class="lbl">Volume général</span><input type="range" id="vMax" min="0" max="100"><button class="pill on" id="cfgBtn">💾 Réglages</button></div>
+  <div class="row setrow"><span class="lbl">Volume général</span><input type="range" id="vMax" min="0" max="100"><button class="pill on" id="cfgBtn">💾 Réglages</button></div>
 </div>
 <div id="over"><div class="box">
   <div class="lbl">Tonalité</div><div class="chips" id="keys"></div>
@@ -181,12 +232,14 @@ if (/^hq:mello/.test(S.tPad)) S.tPad = "nchaude";
 if (/^hq:mello/.test(S.tSolo)) S.tSolo = "bfeutre";
 if (S.aft == null) S.aft = true;
 if (S.ped == null) S.ped = true;
+if (S.pedPad == null) S.pedPad = true;
+if (S.sec == null) S.sec = 0;
 if (!S.touchMode) S.touchMode = S.fixe ? "fixe" : "frappe";
 const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S)); } catch (e) {} mirrorSoon(); };
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "keysMode", "stack"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "keysMode", "stack"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -196,9 +249,12 @@ if (cfgFromLinux && Array.isArray(cfgFromLinux.list)) {
   // Navigateur vidé : on reprend les derniers réglages connus côté Linux.
   if (!localStorage.getItem("creation2") && cfgFromLinux.last) Object.assign(S, cfgFromLinux.last);
 }
+// Combinaisons de sons (solo + accords en un toucher) : gardées avec les réglages, recopiées côté Linux.
+if (!Array.isArray(CFG.combos)) CFG.combos = [];
+if (!CFG.combos.length && cfgFromLinux && Array.isArray(cfgFromLinux.combos)) CFG.combos = cfgFromLinux.combos;
 const cfgStore = () => { try { localStorage.setItem("creation-reglages", JSON.stringify(CFG)); } catch (e) {} mirror(); };
 let mirrorT = null;
-function mirror() { clearTimeout(mirrorT); mirrorT = null; try { document.title = "cfg|" + JSON.stringify({ list: CFG.list, last: pick(), at: Date.now() }); } catch (e) {} }
+function mirror() { clearTimeout(mirrorT); mirrorT = null; try { document.title = "cfg|" + JSON.stringify({ list: CFG.list, combos: CFG.combos || [], last: pick(), at: Date.now() }); } catch (e) {} }
 function mirrorSoon() { clearTimeout(mirrorT); mirrorT = setTimeout(mirror, 2500); }
 // Ouverte depuis la page Musique : sa tonalité, son mode, son empilement et « Ma suite » arrivent dans l'adresse
 // (?root=2&l=1&mode=dorian&stack=sev&suite=2.1.m7-7.4.7-0.0.maj7, chaque accord = classe.lettre.type).
@@ -891,7 +947,12 @@ function playChord(c, cv = 0.85) {
   const per = Math.min(1, 2.2 / Math.sqrt(notes.length));
   chordVoices = notes.map((n, i) => play(n, (i === 0 ? 0.82 : 1) * cv * per, S.tPad, busPad));
 }
-function stopChord() { chordVoices.forEach(v => v.stop()); chordVoices = []; }
+// lift : le doigt vient de quitter l'accord (sans Hold) ; avec la pédale, un son qui s'éteint seul (piano…) résonne
+// jusqu'à l'accord suivant, qui « relève la pédale » (pedOff dans playChord).
+function stopChord(lift) {
+  chordVoices.forEach(v => { if (lift && S.pedPad && v.decays) { v.stop(PED_REL); pedalled.push({ n: -1, v }); } else v.stop(); });
+  chordVoices = [];
+}
 
 // ------------------------------------------------------------------ dessin
 const $ = id => document.getElementById(id);
@@ -907,6 +968,10 @@ function render() {
   const op = S.octPad || 0; $("octPadLbl").textContent = `oct. ${op > 0 ? "+" : ""}${op}`;
   $("touch").textContent = { frappe: "Frappe", pos: "Position ↓", fixe: "Force fixe" }[S.touchMode]; $("touch").classList.toggle("on", S.touchMode !== "fixe");
   $("velInfo").textContent = S.touchMode === "frappe" ? (lastInfo || (S.cal ? `étalonné : ${FEATNAME[S.cal.f]}` : "touche « Étalonner »")) : S.touchMode === "pos" ? "bas de la touche = fort" : "";
+  $("pedPadBtn").textContent = S.pedPad ? "Pédale ✓" : "Pédale"; $("pedPadBtn").classList.toggle("on", !!S.pedPad);
+  document.body.classList.toggle("scene", !!S.scene);
+  $("sceneBtn").textContent = S.scene ? "✓ Scène" : "🎬 Scène"; $("sceneBtn").classList.toggle("on", !!S.scene);
+  renderCombos();
   $("pedBtn").textContent = S.ped ? "Pédale ✓" : "Pédale"; $("pedBtn").classList.toggle("on", !!S.ped);
   $("aftBtn").textContent = S.aft ? "Vibrato : glisser" : "Vibrato : non"; $("aftBtn").classList.toggle("on", !!S.aft);
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev; $("vMax").value = S.vMax;
@@ -962,20 +1027,38 @@ function render() {
   const cs = chords();
   const suite = S.tab === "suite" && SUITE.length > 0;
   const nxt = cur && !suite ? (m.minor ? NEXT_MIN : NEXT_MAJ)[(cur.pc - S.root + 12) % 12] : [];
-  // Rangées de 4 ; la dernière se partage la largeur.
-  const span = k => { const last = Math.floor((cs.length - 1) / 4) * 4; return k >= last ? 12 / (cs.length - last) : 3; };
-  $("tabs").innerHTML = SUITE.length ? [["deg", "Degrés"], ["suite", "Ma suite"]].map(([k, l]) => `<button class="pill ${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("") : "";
+  // Rangées de 4 ; la dernière se partage la largeur (span, plus bas, d'après les accords affichés).
+  const stepping = suite && !!S.step;
+  $("tabs").innerHTML = SUITE.length ? [["deg", "Degrés"], ["suite", "Ma suite"]].map(([k, l]) => `<button class="pill ${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")
+    + (suite ? `<button class="pill ${stepping ? "on" : ""}" data-step="1">Pas à pas</button>` : "")
+    + (stepping ? `<button class="pill" data-stepgo="back">◀</button><button class="pill" data-stepgo="top">⟲ 1</button>` : "") : "";
+  document.body.classList.toggle("stepping", stepping);
+  // Une longue suite se joue par sections de 8 (Scaler : 4 × 8), en grandes cases ; « Tout » les montre toutes.
+  const nSec = suite && cs.length > 8 ? Math.ceil(cs.length / 8) : 0;
+  if (S.sec >= nSec) S.sec = 0;
+  $("secs").style.display = nSec && !stepping ? "" : "none";
+  $("secs").innerHTML = nSec ? [...Array(nSec).keys()].map(k => `<button class="pill ${S.sec === k ? "on" : ""}" data-sec="${k}">${"ABCDEFGHIJKL"[k] || k + 1} · ${k * 8 + 1}–${Math.min(cs.length, k * 8 + 8)}</button>`).join("")
+    + `<button class="pill ${S.sec === -1 ? "on" : ""}" data-sec="-1">Tout</button>` : "";
+  if (stepping) {
+    $("stepNum").textContent = cur ? `${cur.i + 1} / ${cs.length}` : `${cs.length} accords`;
+    $("stepName").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}${bassName(cur)}` : "Touche ici";
+    $("stepHint").textContent = cur ? "" : "chaque toucher joue l'accord suivant";
+  }
   $("chordTitle").textContent = cur ? `${sp[cur.l][cur.pc]}${D.types[cur.t].sym}${bassName(cur)}` : "main gauche";
   // Une longue suite (Scaler : 32 accords) : cases basses, pour que tout tienne à l'écran.
-  $("chords").classList.toggle("many", cs.length > 12);
-  $("chords").innerHTML = cs.map(c => {
+  const shown = nSec && S.sec >= 0 ? cs.slice(S.sec * 8, S.sec * 8 + 8) : cs;
+  const base0 = shown.length ? shown[0].i : 0;
+  const span = k => { k -= base0; const last = Math.floor((shown.length - 1) / 4) * 4; return k >= last ? 12 / (shown.length - last) : 3; };
+  $("chords").classList.toggle("many", shown.length > 12);
+  $("chords").innerHTML = shown.map(c => {
     const on = cur && cur.i === c.i;
     const nx = false;   // plus de repère « accord suivant » (incitait à toucher dessus)
     return `<div class="c i${suite ? "s" : c.i} ${on ? "on" : ""} ${nx ? "nx" : ""}" style="grid-column:span ${span(c.i)}" data-c="${c.i}"><small>${c.lab}${nx ? " →" : ""}</small><b class="${nameCls(sp[c.l][c.pc] + (D.types[c.t].sym || "") + bassName(c))}">${sp[c.l][c.pc]}${D.types[c.t].sym}${bassName(c)}</b></div>`;
   }).join("");
   // Les couleurs de l'accord touché : toutes les variantes de sa qualité, sur sa fondamentale.
   if (cur) {
-    const c = cs[cur.i];
+    const c = cs[cur.i] || cur;
+    if (!c.q) c.q = qualOf(c.t);
     const vs = [...new Set([c.t, ...D.qvars[c.q]])].filter(t => D.types[t]);
     $("vars").innerHTML = vs.map(t => `<button class="pill ${cur.t === t ? "on" : ""}" data-v="${t}">${sp[c.l][c.pc]}${D.types[t].sym || ""}</button>`).join("");
   } else $("vars").innerHTML = `<span class="lbl">Touche un accord : ses couleurs (6, add9, 7♭9, 13…) s'afficheront ici.</span>`;
@@ -1241,7 +1324,7 @@ document.addEventListener("contextmenu", e => e.preventDefault());
 
 // accords : sonnent tant que le doigt est posé (ou jusqu'au suivant avec « Tenu »)
 let chordPointer = null;
-const chordUp = e => { if (e.pointerId === chordPointer) { chordPointer = null; if (!S.hold) stopChord(); } };
+const chordUp = e => { if (e.pointerId === chordPointer) { chordPointer = null; $("stepZone").classList.remove("flash"); if (!S.hold) stopChord(true); } };
 document.addEventListener("pointerup", chordUp);
 document.addEventListener("pointercancel", chordUp);
 $("hold").onclick = () => { S.hold = !S.hold; save(); if (!S.hold && chordPointer === null) stopChord(); render(); };
@@ -1249,7 +1332,7 @@ $("chords").addEventListener("pointerdown", e => {
   const el = e.target.closest(".c"); if (!el) return;
   chordPointer = e.pointerId;
   const c = chords()[+el.dataset.c];
-  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, v: c.v, i: c.i }; selS = null;
+  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, v: c.v, i: c.i }; selS = null; stepIdx = c.i;
   const cv = touchVel(el, e.clientY, e); e.__vel = cv;
   playChord(c, cv); render();
   const mine = chordVoices;
@@ -1261,6 +1344,64 @@ $("vars").addEventListener("pointerdown", e => {
   chordPointer = e.pointerId;
   cur = Object.assign({}, cur, { t: b.dataset.v, v: null }); selS = null;
   playChord(cur); render();
+});
+// Pas à pas : un toucher n'importe où dans la zone joue l'accord suivant (◀ revient d'un accord, ⟲ repart du premier).
+let stepIdx = -1;
+$("stepZone").addEventListener("pointerdown", e => {
+  const cs = chords(); if (!cs.length) return;
+  stepIdx = (stepIdx + 1) % cs.length;
+  chordPointer = e.pointerId;
+  const c = cs[stepIdx];
+  cur = { pc: c.pc, l: c.l, t: c.t, b: c.b, v: c.v, i: c.i }; selS = null;
+  S.sec = Math.floor(c.i / 8);
+  const el = $("stepZone"); el.classList.add("flash");
+  const cv = touchVel(el, e.clientY, e); e.__vel = cv;
+  playChord(c, cv); render();
+  const mine = chordVoices;
+  measureHit(performance.now(), e, v => { if (chordVoices === mine) mine.forEach(x => x.setVel(v / cv)); });
+});
+$("tabs").addEventListener("click", e => {
+  if (e.target.closest("[data-step]")) { S.step = !S.step; stepIdx = cur ? cur.i : -1; save(); render(); return; }
+  const g = e.target.closest("[data-stepgo]");
+  if (g) { stopChord(); pedOff();
+    if (g.dataset.stepgo === "top") { stepIdx = -1; cur = null; }
+    else { stepIdx = Math.max(-1, stepIdx - 2); cur = null; }   // le prochain toucher rejoue l'accord d'avant
+    selS = null; render(); return; }
+});
+$("secs").addEventListener("click", e => { const b = e.target.closest("[data-sec]"); if (!b) return; S.sec = +b.dataset.sec; save(); render(); });
+$("pedPadBtn").onclick = () => { S.pedPad = !S.pedPad; if (!S.pedPad) pedOff(); save(); render(); };
+$("sceneBtn").onclick = () => { S.scene = !S.scene; combEdit = false; save(); render(); };
+// Combinaisons de sons : un toucher applique solo + accords (et leurs octaves) ; « + » garde la combinaison actuelle ;
+// « ✎ » montre les ✕ pour en retirer. Hors mode scène seulement pour + et ✎.
+let combEdit = false;
+const shortName = id => soundName(id).replace(/\s*\(.*?\)\s*/g, " ").replace(/^(Grand piano|Piano droit) /, "").trim().split(" ").slice(0, 3).join(" ").replace(/ (de|du|des|à|en|d'|1)$/i, "").replace(/ (de|du|des)$/i, "");
+const comboOn = k => { const c = CFG.combos[k]; return c && c.tSolo === S.tSolo && c.tPad === S.tPad && (c.bank || S.bank) === S.bank; };
+function renderCombos() {
+  const cs = CFG.combos || [];
+  $("combos").innerHTML = cs.map((c, k) => combEdit
+      ? `<button class="pill del" data-cdel="${k}">✕ ${c.n}</button>`
+      : `<button class="pill cmb ${comboOn(k) ? "on" : ""}" data-cmb="${k}">${c.n}</button>`).join("")
+    + (combEdit ? `<button class="pill edit on" data-cedit="1">OK</button>`
+      : `<button class="pill edit" data-cadd="1">＋ ${cs.length ? "" : "Garder ces sons"}</button>` + (cs.length ? `<button class="pill edit" data-cedit="1">✎</button>` : ""));
+}
+$("combos").addEventListener("click", e => {
+  const t = e.target.closest("button"); if (!t) return;
+  if (t.dataset.cedit) { combEdit = !combEdit; render(); return; }
+  if (t.dataset.cadd) {
+    const n = shortName(S.tSolo) === shortName(S.tPad) ? shortName(S.tSolo) : `${shortName(S.tPad)} + ${shortName(S.tSolo)}`;
+    CFG.combos.push({ n, tSolo: S.tSolo, tPad: S.tPad, bank: S.bank, oct: S.oct, octPad: S.octPad || 0 });
+    cfgStore(); render(); return;
+  }
+  if (t.dataset.cdel != null) { CFG.combos.splice(+t.dataset.cdel, 1); if (!CFG.combos.length) combEdit = false; cfgStore(); render(); return; }
+  if (t.dataset.cmb != null) {
+    const c = CFG.combos[+t.dataset.cmb]; if (!c) return;
+    audio(); pedOff();
+    const chordWasOn = chordVoices.length > 0;
+    Object.assign(S, { tSolo: c.tSolo, tPad: c.tPad, bank: c.bank || S.bank, oct: c.oct ?? S.oct, octPad: c.octPad ?? S.octPad });
+    save(); preload();
+    if (cur && chordWasOn && (S.hold || chordPointer !== null)) playChord(cur);
+    render();
+  }
 });
 $("tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; stopChord(); cur = null; selS = null; render(); });
 $("stop").onclick = () => { stopChord(); cur = null; selS = null; render(); };
