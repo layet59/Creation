@@ -126,8 +126,8 @@
   #stepZone b { font:800 30px system-ui; white-space:nowrap; }
   .stepping #stepZone { display:flex; } .stepping #chords, .stepping #vars, .stepping #secs { display:none !important; }
   /* Mode scène : seuls restent les accords, le solo, les combinaisons de sons et les commandes du jeu. */
-  .scene #scales, .scene #keysMode, .scene #tSolo, .scene #octDn, .scene #octLbl, .scene #octUp, .scene .keyrow,
-  .scene #vars, .scene #tPad, .scene #octPadDn, .scene #octPadLbl, .scene #octPadUp, .scene .setrow,
+  .scene #scales, .scene #keysMode, .scene #octDn, .scene #octLbl, .scene #octUp, .scene .keyrow,
+  .scene #vars, .scene #octPadDn, .scene #octPadLbl, .scene #octPadUp, .scene .setrow,
   .scene #combos .edit, .scene #combos .del, .scene #chordTitle, .scene #scaleTitle { display:none !important; }
   .scene .acc .row .grow { flex:1; }
   .scene .c { height:84px; } .scene .c b { font-size:20px; }
@@ -362,7 +362,7 @@ function scaleCands() {
 }
 
 // ------------------------------------------------------------------ synthé WebAudio
-let ac = null, master, busPad, busSolo, busAcc, busBass, busDrum, revSend, boost, chPad, chSolo;
+let ac = null, master, busPad, busSolo, busAcc, busBass, busDrum, bassPres, revSend, boost, chPad, chSolo;
 // AT : l'instant (horloge audio) où la prochaine note doit partir ; 0 = tout de suite. L'accompagnement programme
 // ses notes un peu à l'avance pour qu'elles tombent pile en mesure.
 let AT = 0;
@@ -410,7 +410,16 @@ function audio() {
   revSend = ac.createGain(); busPad.connect(revSend); busSolo.connect(revSend); revSend.connect(conv); conv.connect(master);
   // Basse et batterie de l'accompagnement : leur propre volume, un peu de réverb.
   busAcc = ac.createGain(); busAcc.connect(master);
-  busBass = ac.createGain(); busDrum = ac.createGain(); busBass.connect(busAcc); busDrum.connect(busAcc); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
+  busBass = ac.createGain(); busDrum = ac.createGain(); busBass.connect(busAcc);
+  // Présence de la basse : le haut-parleur d'un téléphone ne rend rien sous ~150 Hz. Une copie saturée de la basse,
+  // gardée entre 180 et 1600 Hz, fait entendre ses harmoniques : l'oreille reconstitue la note grave.
+  { const sh = ac.createWaveShaper(), cv = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; cv[i] = Math.tanh(4 * x) / Math.tanh(4); }
+    sh.curve = cv; sh.oversample = "2x"; const pre = ac.createGain(); pre.gain.value = 1.5;
+    const hp = ac.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 180; hp.Q.value = 0.7;
+    const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1600; lp.Q.value = 0.7;
+    bassPres = ac.createGain(); bassPres.gain.value = 1;
+    busBass.connect(pre); pre.connect(sh); sh.connect(hp); hp.connect(lp); lp.connect(bassPres); bassPres.connect(busAcc); window.__bassPres = bassPres; }
+   busDrum.connect(busAcc); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
   mix(); preload();
 }
 function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 4; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
