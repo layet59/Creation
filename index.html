@@ -182,6 +182,7 @@
   <div class="row">
     <button class="pill" id="sceneBtn"></button>
     <button class="pill" id="mixBtn">🎚 Mix</button>
+    <button class="pill" id="cfgBtn2">💾</button>
     <span id="combos" class="scroller grow"></span>
   </div>
   <div class="card acc">
@@ -1985,7 +1986,7 @@ function renderCfg() {
     : `<div class="lbl">Aucun réglage enregistré pour l'instant.</div>`;
 }
 function openCfg() { $("cfgName").value = ""; renderCfg(); $("cfgBox").style.display = "flex"; }
-$("cfgBtn").onclick = openCfg;
+$("cfgBtn").onclick = openCfg; $("cfgBtn2").onclick = openCfg;
 $("cfgOk").onclick = () => { $("cfgBox").style.display = "none"; };
 $("cfgBox").addEventListener("click", e => { if (e.target === $("cfgBox")) $("cfgBox").style.display = "none"; });
 $("cfgSave").onclick = () => {
