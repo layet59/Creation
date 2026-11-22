@@ -689,7 +689,17 @@ const SY = (() => {
   function mine() { try { return JSON.parse(localStorage.getItem(LS) || "[]").map(p => ({ ...norm(p), id: p.id })); } catch (e) { return []; } }
   function saveMine(list) { try { localStorage.setItem(LS, JSON.stringify(list)); } catch (e) {} }
   function get(id) { if (FACT[id]) return FACT[id]; const m = mine().find(p => p.id === id); return m || null; }
-  return { DEF, FACT, WNAMES, norm, part, voice, mine, saveMine, get, LS, hz };
+  // Limiteur de sortie à anticipation (AudioWorklet) : le limiteur intégré du navigateur réagit en 2–3 ms et laisse
+  // passer l'attaque des sons percussifs (clavinet, cloches), qui écrêtait ensuite (« saturation qui grésille »).
+  // Celui-ci retarde le son de 5 ms et baisse le gain avant le pic : crête ≤ −1 dB, sans écrêtage. Promesse : le nœud,
+  // ou null si le navigateur ne sait pas (on garde alors l'ancienne chaîne).
+  const LIMCODE = '// Limiteur à anticipation (5 ms) : chaque échantillon sort 5 ms plus tard, et le gain a déjà baissé quand un pic arrive.\nclass Lim extends AudioWorkletProcessor {\n  constructor() {\n    super(); this.la = Math.round(0.005 * sampleRate); this.N = this.la + 1;\n    this.buf = [new Float32Array(this.N), new Float32Array(this.N)]; this.w = 0;\n    this.qv = new Float32Array(this.N * 2); this.qi = new Int32Array(this.N * 2); this.qh = 0; this.qt = 0; this.n = 0;\n    this.g = 1; this.thr = 0.89; this.att = 1 - Math.exp(-4 / this.la); this.rel = 1 - Math.exp(-1 / (0.15 * sampleRate));\n  }\n  process(inputs, outputs) {\n    const inp = inputs[0], out = outputs[0], L = out[0].length, nc = out.length;\n    const N = this.N, M = this.qv.length;\n    for (let i = 0; i < L; i++) {\n      let a = 0;\n      for (let c = 0; c < nc; c++) { const x = inp[c] ? inp[c][i] : (inp[0] ? inp[0][i] : 0); const ax = x < 0 ? -x : x; if (ax > a) a = ax; this.buf[c & 1][this.w] = x; }\n      // file monotone : le plus grand |x| des N derniers échantillons\n      const n = this.n++;\n      while (this.qt !== this.qh && this.qv[(this.qt - 1 + M) % M] <= a) this.qt = (this.qt - 1 + M) % M;\n      this.qv[this.qt] = a; this.qi[this.qt] = n; this.qt = (this.qt + 1) % M;\n      while (this.qi[this.qh] <= n - N) this.qh = (this.qh + 1) % M;\n      const pk = this.qv[this.qh], target = pk > this.thr ? this.thr / pk : 1;\n      this.g += (target - this.g) * (target < this.g ? this.att : this.rel);\n      const r = (this.w + 1) % N;   // l\'échantillon le plus ancien : celui qui sort maintenant\n      for (let c = 0; c < nc; c++) out[c][i] = this.buf[c & 1][r] * this.g;\n      this.w = r;\n    }\n    return true;\n  }\n}\nregisterProcessor("limiteur", Lim);\n';
+  function limiter(ac) {
+    if (!ac.audioWorklet || typeof AudioWorkletNode === "undefined") return Promise.resolve(null);
+    const url = URL.createObjectURL(new Blob([LIMCODE], { type: "application/javascript" }));
+    return ac.audioWorklet.addModule(url).then(() => new AudioWorkletNode(ac, "limiteur", { outputChannelCount: [2] })).catch(() => null);
+  }
+  return { DEF, FACT, WNAMES, norm, part, voice, mine, saveMine, get, LS, hz, limiter };
 })();
 
 // ------------------------------------------------------------------ synthé WebAudio
@@ -719,6 +729,9 @@ function audio() {
   clip.curve = cv; clip.oversample = "2x";
   comp.connect(boost); boost.connect(lim); lim.connect(clip); clip.connect(ac.destination);
   window.__comp = comp; window.__lim = lim; window.__boost = boost; window.__clip = clip;   // pour mesurer (tests)
+  // Le limiteur à anticipation (SY.limiter) remplace celui du navigateur dès qu'il est prêt : l'attaque des sons
+  // percussifs passait à travers (2–3 ms) et écrêtait. L'écrêtage doux reste au bout, par sécurité (rien ne l'atteint).
+  SY.limiter(ac).then(w => { if (!w) return; boost.disconnect(); boost.connect(w); w.connect(clip); lim.disconnect(); window.__limw = w; });
   // Réverbération de salle : une réponse impulsionnelle stéréo calculée (bruit qui décroît en 2,4 s, plus sombre à la fin),
   // envoyée depuis les deux parties ; le son direct reste entier.
   const sr = ac.sampleRate, len = Math.round(sr * 2.4), ir = ac.createBuffer(2, len, sr);
