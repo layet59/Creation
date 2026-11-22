@@ -254,6 +254,8 @@
   <div class="lbl">Basse et batterie</div>
   <div class="chips"><button class="pill" id="bassOnBtn"></button><button class="pill" id="tBass"></button><button class="pill" id="bassUpBtn"></button><span class="pill" style="display:inline-flex;gap:8px;align-items:center;padding:3px 6px">Octave basse<button class="pill" id="bassOctDn">−</button><b id="bassOctLbl"></b><button class="pill" id="bassOctUp">+</button></span><button class="pill" id="drumsBtn"></button><button class="pill" id="fillsBtn"></button><button class="pill" id="cSyncBtn"></button></div>
   <div class="lbl">Kit de batterie (un toucher l'essaie)</div><div id="kitList" style="display:flex;flex-direction:column;gap:4px"></div>
+  <div class="row"><span class="lbl">Jeu de la batterie</span><input type="range" id="vDrumPlay" min="0" max="100"><span class="lbl" id="drumPlayL" style="min-width:64px"></span></div>
+  <div class="lbl" style="opacity:.7">Et ton toucher : accord effleuré = batterie tout en douceur, accord frappé = batterie appuyée.</div>
   <div class="row"><span class="lbl">Basse</span><input type="range" id="vBass" min="0" max="100"><span class="lbl">Batterie</span><input type="range" id="vDrum" min="0" max="100"></div>
   <div class="lbl">Les accords du rythme prennent le son des accords (et le curseur « Accords »).</div>
 </div></div>
@@ -294,13 +296,14 @@ if (S.bassUp == null) S.bassUp = true;
 if (!S.kit || (S.kit !== "synth" && !KITS_IDS.includes(S.kit))) S.kit = "synth";
 if (S.vBass == null) S.vBass = 70;
 if (S.vDrum == null) S.vDrum = 70;
+if (S.drumPlay == null) S.drumPlay = 50;
 S.accOn = false;
 if (!S.touchMode) S.touchMode = S.fixe ? "fixe" : "frappe";
 const save = () => { try { localStorage.setItem("creation2", JSON.stringify(S)); } catch (e) {} mirrorSoon(); };
 // ------------------------------------------------------------------ réglages enregistrés
 // Gardés dans le navigateur ET recopiés côté Linux (titre "cfg|{json}" → ~/.local/share/creation-reglages.json
 // par la page Musique, qui les renvoie dans l'adresse ?cfg=) : ils survivent à un navigateur vidé.
-const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "fills", "cSync", "bassUp", "bassOct", "kit", "vBass", "vDrum", "keysMode", "stack", "msec"];
+const CFG_KEYS = ["tSolo", "tPad", "bank", "vPad", "vSolo", "vRev", "vMax", "oct", "octPad", "hold", "touchMode", "aft", "ped", "pedPad", "bpm", "style", "tBass", "bassOn", "drums", "fills", "cSync", "bassUp", "bassOct", "kit", "vBass", "vDrum", "drumPlay", "keysMode", "stack", "msec"];
 const pick = () => { const o = {}; CFG_KEYS.forEach(k => { if (S[k] !== undefined) o[k] = S[k]; }); return o; };
 let CFG = (() => { try { return JSON.parse(localStorage.getItem("creation-reglages") || "null"); } catch (e) { return null; } })() || { list: [] };
 let cfgFromLinux = null;
@@ -2026,21 +2029,27 @@ function accNote(n, vel, id, bus, T, gate, part, k) {
   r.to = setTimeout(() => { v.stop(); acc.recs = acc.recs.filter(x => x !== r); }, Math.max(0, (T + gate - ac.currentTime) * 1000));
 }
 // Les notes d'un pas de la mesure, pour l'accord en cours ; noDrums : on rejoue un pas déjà programmé (l'accord a changé).
+// La force d'un coup de batterie : celle prévue par le rythme × l'intensité du batteur. Celle-ci suit le réglage
+// « Jeu de la batterie » (très doux 0,35 … très fort 1,2) et la force de ton toucher sur les accords (effleuré ×0,45 …
+// frappé ×1,2) : les nuances enregistrées des kits (5 à 10 par élément) servent vraiment, des plus douces aux plus fortes.
+const DPLAY = ["très doux", "doux", "moyen", "fort", "très fort"];
+const dBase = () => 0.35 + 0.85 * S.drumPlay / 100;
+const drumInt = vel => { const t = Math.max(0, Math.min(1, (vel - 0.35) / 0.65)); return Math.min(1.25, dBase() * (0.45 + 0.75 * t)); };
 function schedStep(k, T, noDrums, P = { c: true, b: true }) {
   const st = style(), sd = stepDur(), vel = acc.vel, div = st.div || 4;
   if (st.sw && k % 2 === 1) T += st.sw * sd;
   if (!noDrums && S.drums && st.evs) {
-    for (const [kind, v] of st.evs[k] || []) drum(kind, T, v * (0.6 + 0.4 * vel));
+    for (const [kind, v] of st.evs[k] || []) drum(kind, T, v * drumInt(vel));
   } else if (!noDrums && S.drums) {
     const hasKit = DRUMS.some(d => st[d] && st[d].length);
     const fillBar = hasKit && !st.nofill && S.fills && acc.bar % 4 === 3 && k >= st.steps - div;
     if (fillBar) {
       const i = k - (st.steps - div), seq = div === 3 ? ["s", "u", "t"] : ["s", "s", "u", "t"];
-      drum(seq[i], T, (0.55 + 0.12 * i) * (0.6 + 0.4 * vel));
-      if (i === 0) drum("k", T, 0.6 * (0.6 + 0.4 * vel));
+      drum(seq[i], T, (0.55 + 0.12 * i) * drumInt(vel));
+      if (i === 0) drum("k", T, 0.6 * drumInt(vel));
     } else {
-      for (const kind of DRUMS) for (const [ks, v] of st[kind] || []) if (ks === k) drum(kind, T, v * (0.6 + 0.4 * vel));
-      if (hasKit && !st.nofill && S.fills && k === 0 && acc.bar > 0 && acc.bar % 4 === 0) drum("x", T, 0.55 * (0.6 + 0.4 * vel));
+      for (const kind of DRUMS) for (const [ks, v] of st[kind] || []) if (ks === k) drum(kind, T, v * drumInt(vel));
+      if (hasKit && !st.nofill && S.fills && k === 0 && acc.bar > 0 && acc.bar % 4 === 0) drum("x", T, 0.55 * drumInt(vel));
     }
   }
   if (!noDrums && k % div === 0) { const beat = st.evs ? (k / div) % 4 + 1 : k / div + 1; setTimeout(() => showBeat(beat), Math.max(0, (T - ac.currentTime) * 1000)); }
@@ -2182,7 +2191,7 @@ function renderAcc() {
       .map(([k, K]) => `<button class="pill ${S.kit === k ? "on" : ""}" data-kit="${k}">${K.n}${S.kit === k ? kitState(k) : ""}</button>`).join("")}</div>`).join("")
     + `<div class="lbl" style="opacity:.7">Kits AVL : Glen MacArthur, « AVL Drumkits » (licence CC BY-SA).</div>`;
   $("tBass").textContent = "Son : " + soundName(S.tBass) + sfStatus(S.tBass);
-  $("vBass").value = S.vBass; $("vDrum").value = S.vDrum;
+  $("vBass").value = S.vBass; $("vDrum").value = S.vDrum; $("vDrumPlay").value = S.drumPlay; drumPlayLabel();
 }
 // La rangée Intro · A B C D · Fin (rythmes « arrangeur » seulement).
 function renderSec() {
@@ -2236,7 +2245,7 @@ $("bassOnBtn").onclick = () => { S.bassOn = !S.bassOn; save(); renderAcc(); };
 // Essayer un kit : grosse caisse, charleston, caisse claire, charleston, ouvert (dès qu'il est chargé).
 function tryKit() {
   audio(); const t = ac.currentTime + 0.05, sd = 60 / Math.max(80, S.bpm) / 2;
-  [["k", 0, .9], ["h", 0, .5], ["h", 1, .4], ["s", 2, .85], ["h", 2, .5], ["k", 3, .7], ["o", 3, .5], ["k", 4, .9], ["x", 4, .6]].forEach(([k, i, v]) => drum(k, t + i * sd, v));
+  [["k", 0, .9], ["h", 0, .5], ["h", 1, .4], ["s", 2, .85], ["h", 2, .5], ["k", 3, .7], ["o", 3, .5], ["k", 4, .9], ["x", 4, .6]].forEach(([k, i, v]) => drum(k, t + i * sd, v * drumInt(0.8)));
 }
 $("kitList").addEventListener("click", e => {
   const b = e.target.closest("[data-kit]"); if (!b) return;
@@ -2254,6 +2263,9 @@ $("drumsBtn").onclick = () => { S.drums = !S.drums; save(); renderAcc(); };
 $("tBass").onclick = () => { $("accBox").style.display = "none"; openSounds("bass"); };
 $("vBass").oninput = e => { S.vBass = +e.target.value; mix(); save(); };
 $("vDrum").oninput = e => { S.vDrum = +e.target.value; mix(); save(); };
+const drumPlayLabel = () => { $("drumPlayL").textContent = DPLAY[Math.min(4, Math.floor(S.drumPlay / 20.01))]; };
+$("vDrumPlay").oninput = e => { S.drumPlay = +e.target.value; drumPlayLabel(); save(); };
+$("vDrumPlay").onchange = () => tryKit();
 const setBpm = b => { S.bpm = Math.max(40, Math.min(200, Math.round(b))); save(); renderAcc(); };
 $("bpmDn").onclick = () => setBpm(S.bpm - 2);
 $("bpmUp").onclick = () => setBpm(S.bpm + 2);
