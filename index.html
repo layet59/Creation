@@ -221,7 +221,7 @@
   <div class="row setrow"><span class="lbl">Toucher</span><button class="pill" id="touch"></button><span class="lbl grow" id="velInfo" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span><button class="pill" id="aftBtn"></button><button class="pill" id="calBtn">Étalonner</button></div>
   <div class="row setrow">
     <span class="lbl">Accords</span><input type="range" id="vPad" min="0" max="100">
-    <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="100">
+    <span class="lbl">Solo</span><input type="range" id="vSolo" min="0" max="200">
     <span class="lbl">Réverb</span><input type="range" id="vRev" min="0" max="100">
   </div>
   <div class="row setrow"><span class="lbl">Volume général</span><input type="range" id="vMax" min="0" max="100"><button class="pill on" id="cfgBtn">💾 Réglages</button></div>
@@ -753,7 +753,10 @@ function audio() {
    busDrum.connect(busAcc); const accRev = ac.createGain(); accRev.gain.value = 0.35; busAcc.connect(accRev); accRev.connect(revSend);
   mix(); preload();
 }
-function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 3; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = S.vSolo / 100 * 0.6; revSend.gain.value = S.vRev / 100 * 0.9;
+// Solo : jusqu'à 100 comme avant (×0,6) ; de 100 à 200, un renfort jusqu'à ×1,5 (+8 dB) pour les sons doux ou
+// percussifs (clavinet, cloches), que le limiteur de sortie garde sans saturer.
+const soloGain = () => S.vSolo <= 100 ? S.vSolo / 100 * 0.6 : 0.6 * (1 + 1.5 * (S.vSolo - 100) / 100);
+function mix() { if (!ac) return; busAcc.gain.value = 1.1; busBass.gain.value = S.vBass / 100 * 3; busDrum.gain.value = S.vDrum / 100 * 0.5; busPad.gain.value = S.vPad / 100 * 1.2; busSolo.gain.value = soloGain(); revSend.gain.value = S.vRev / 100 * 0.9;
   const chOf = id => (SOUNDS[id] && SOUNDS[id].ch) || 0;
   chPad.gain.value = busPad.gain.value * chOf(S.tPad) * 0.8; chSolo.gain.value = busSolo.gain.value * chOf(S.tSolo) * 0.8;
   // ×0,7 : le compresseur de Chrome rattrape lui-même le volume ; avec l'ancien gain le limiteur écrasait toutes les attaques (−10 dB).
@@ -2418,7 +2421,7 @@ $("octUp").onclick = () => { S.oct = Math.min(1, S.oct + 1); save(); render(); }
 $("vMax").oninput = e => { S.vMax = +e.target.value; mix(); save(); };
 // ------------------------------------------------------------------ mixer
 const MIX = [["vPad", "Accords"], ["vSolo", "Solo"], ["vBass", "Basse"], ["vDrum", "Batterie"], ["vRev", "Réverb"], ["vMax", "Général"]];
-$("mixRows").innerHTML = MIX.map(([k, l]) => `<div class="mixrow" data-mk="${k}"><span>${l}</span><input type="range" min="0" max="100" data-mix="${k}"><b></b></div>`).join("");
+$("mixRows").innerHTML = MIX.map(([k, l]) => `<div class="mixrow" data-mk="${k}"><span>${l}</span><input type="range" min="0" max="${k === "vSolo" ? 200 : 100}" data-mix="${k}"><b></b></div>`).join("");
 function renderMix() {
   const m = $("mixer"); m.classList.toggle("on", !!S.mixOn); m.className = m.className.replace(/\bp\d\b/g, "").trim() + " p" + (S.mixPos || 0);
   $("mixBtn").classList.toggle("on", !!S.mixOn);
