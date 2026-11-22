@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Synthé</title>
+<style>
+:root { --bg:#0e1014; --card:#171a21; --card2:#1f232c; --fg:#eceef3; --mut:#8d94a3; --gold:#F5B342; --blue:#5aa9ff; --line:#2a2f3a; }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden; user-select:none; -webkit-user-select:none; }
+#app { height:100%; display:flex; flex-direction:column; gap:6px; padding:6px 8px 8px; }
+.top { display:flex; align-items:center; gap:6px; }
+.pill { border:1px solid var(--line); background:var(--card2); color:var(--fg); border-radius:999px; padding:7px 12px; font:600 13px system-ui; white-space:nowrap; }
+.pill.on { background:var(--gold); color:#111; border-color:var(--gold); }
+.pill.sm { padding:5px 9px; font-size:12px; }
+#pname { flex:1; min-width:0; text-align:center; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:6px 8px; }
+#pname b { display:block; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#pname small { color:var(--mut); font-size:11px; }
+#scope { width:100%; height:44px; background:var(--card); border-radius:10px; display:block; }
+.tabs { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; }
+.tabs::-webkit-scrollbar { display:none; }
+.tabs button { flex:1; min-width:62px; border:0; background:var(--card); color:var(--mut); border-radius:10px; padding:8px 4px; font:700 12px system-ui; letter-spacing:.5px; }
+.tabs button.on { background:var(--card2); color:var(--gold); box-shadow:inset 0 -2px 0 var(--gold); }
+#panel { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-bottom:4px; }
+.card { background:var(--card); border-radius:12px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+.card h3 { margin:0; font-size:12px; letter-spacing:1px; color:var(--gold); display:flex; align-items:center; gap:8px; }
+.card h3 .sw { margin-left:auto; }
+.card.off > :not(h3) { opacity:.35; pointer-events:none; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; }
+.ctl { display:flex; flex-direction:column; gap:0; }
+.ctl label { display:flex; justify-content:space-between; font-size:11px; color:var(--mut); }
+.ctl label span { color:var(--fg); font-variant-numeric:tabular-nums; }
+input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:30px; background:transparent; margin:0; touch-action:none; }
+input[type=range]::-webkit-slider-runnable-track { height:6px; border-radius:3px; background:linear-gradient(90deg,var(--gold) var(--p,50%),var(--line) var(--p,50%)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; border-radius:50%; background:#fff; margin-top:-8px; box-shadow:0 1px 4px #0008; }
+.chips { display:flex; gap:4px; flex-wrap:wrap; }
+.chips button { border:1px solid var(--line); background:var(--card2); color:var(--fg); border-radius:8px; padding:5px 8px; font:600 12px system-ui; }
+.chips button.on { background:var(--blue); border-color:var(--blue); color:#06121f; }
+canvas.env { width:100%; height:70px; background:var(--card2); border-radius:8px; }
+/* clavier */
+#kbWrap { display:flex; flex-direction:column; gap:4px; }
+.kbBar { display:flex; gap:4px; align-items:center; overflow-x:auto; scrollbar-width:none; }
+#kb { position:relative; height:118px; touch-action:none; }
+#kb .k { position:absolute; top:0; border-radius:0 0 6px 6px; }
+#kb .w { height:100%; background:linear-gradient(#f4f4f4,#dcdcdc); border:1px solid #999; z-index:1; }
+#kb .b { height:62%; background:linear-gradient(#333,#111); border:1px solid #000; z-index:2; }
+#kb .k.on.w { background:linear-gradient(#ffe2a6,var(--gold)); }
+#kb .k.on.b { background:linear-gradient(#b07a1e,#7a520f); }
+#kb .k i { position:absolute; bottom:4px; left:0; right:0; text-align:center; font:600 10px system-ui; color:#777; font-style:normal; }
+#bendBox { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut); }
+/* fenêtres */
+.ov { position:fixed; inset:0; background:#000b; display:none; align-items:flex-end; justify-content:center; z-index:10; }
+.ov .box { background:var(--card); width:100%; max-width:720px; max-height:88%; border-radius:16px 16px 0 0; display:flex; flex-direction:column; }
+.ov .hd { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line); }
+.ov .hd b { flex:1; font-size:15px; }
+.ov .bd { overflow-y:auto; padding:8px 12px 16px; display:flex; flex-direction:column; gap:6px; }
+.lbl { font-size:11px; color:var(--mut); letter-spacing:1px; margin-top:6px; }
+.row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+input[type=text] { flex:1; min-width:0; background:var(--card2); border:1px solid var(--line); color:var(--fg); border-radius:10px; padding:9px 10px; font:15px system-ui; }
+.mine { display:flex; gap:6px; align-items:center; }
+.mine .pill:first-child { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; }
+#toast { position:fixed; left:50%; bottom:150px; transform:translateX(-50%); background:var(--gold); color:#111; padding:8px 14px; border-radius:999px; font:700 13px system-ui; display:none; z-index:20; }
+@media (orientation:landscape) and (min-width:700px) {
+  #kb { height:150px; }
+  .grid { grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); }
+}
+</style></head>
+<body>
+<div id="app">
+  <div class="top">
+    <button class="pill" id="prev">◀</button>
+    <div id="pname"><b id="pn">—</b><small id="pc">—</small></div>
+    <button class="pill" id="next">▶</button>
+  </div>
+  <div class="top">
+    <button class="pill" id="lib">🎛 Sons</button>
+    <button class="pill" id="save">💾 Garder</button>
+    <button class="pill" id="vary">🎲 Varier</button>
+    <button class="pill" id="undo">↶</button>
+    <button class="pill" id="panic">⏹</button>
+  </div>
+  <canvas id="scope"></canvas>
+  <div class="tabs" id="tabs"></div>
+  <div id="panel"></div>
+  <div id="kbWrap">
+    <div class="kbBar">
+      <button class="pill sm" id="octD">Oct −</button><span id="octV" style="font:700 12px system-ui;min-width:28px;text-align:center">0</span><button class="pill sm" id="octU">Oct +</button>
+      <button class="pill sm" id="hold">Hold</button>
+      <button class="pill sm" id="chord">Accord</button>
+      <div id="bendBox">Molette <input type="range" id="bend" min="-100" max="100" value="0" style="width:110px;height:26px"></div>
+    </div>
+    <div id="kb"></div>
+  </div>
+</div>
+<div class="ov" id="libBox"><div class="box"><div class="hd"><b>Sons</b><button class="pill" data-close>Fermer</button></div><div class="bd" id="libList"></div></div></div>
+<div class="ov" id="saveBox"><div class="box"><div class="hd"><b>Garder ce son</b><button class="pill" data-close>Fermer</button></div><div class="bd">
+  <div class="lbl">NOM</div><div class="row"><input type="text" id="sName" maxlength="40"></div>
+  <div class="lbl">FAMILLE (sert aussi de rangement dans Création)</div><div class="chips" id="sCat"></div>
+  <div class="row" style="margin-top:10px"><button class="pill on" id="sNew">Enregistrer comme nouveau</button><button class="pill" id="sRep" style="display:none">Remplacer « <span id="sRepN"></span> »</button></div>
+  <div class="lbl">Les sons gardés apparaissent dans Création, dans la liste des sons, partie « Mes synthés ».</div>
+</div></div></div>
+<div id="toast"></div>
+<script>
+// ================================================================== SY : le moteur de synthèse (page Synthé + Création)
+// Un son (« préréglage ») est un objet JSON simple ; SY.part(ac, sortie) crée une partie qui le joue, avec ses effets.
+// 3 oscillateurs (formes, octave, demi-tons, désaccord, unisson, largeur d'impulsion), sous-oscillateur, bruit, FM,
+// filtre 12/24 dB (passe-bas, passe-haut, passe-bande, coupe-bande) avec enveloppe, suivi de clavier et vélocité,
+// 2 LFO (hauteur, filtre, volume, panoramique, largeur d'impulsion), enveloppe de hauteur, poly / mono / legato + glide,
+// effets : saturation, chorus, phaser, écho, réverbe.
+const SY = (() => {
+  const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+  const OSC0 = { on: 1, w: "saw", oct: 0, semi: 0, fine: 0, lvl: 0.7, pw: 0.5, uni: 1, det: 12, spr: 0.6 };
+  const DEF = {
+    name: "Nouveau son", cat: "Mes sons",
+    o: [{ ...OSC0 }, { ...OSC0, on: 0, fine: 7 }, { ...OSC0, on: 0, w: "square", oct: -1 }],
+    sub: 0, noise: 0, ncol: 0.5, fm: 0,
+    f: { t: "lp24", cut: 3000, res: 0.1, key: 0.5, env: 0.3, vel: 0.3, drive: 0 },
+    fe: [0.005, 0.5, 0.3, 0.4], ae: [0.005, 0.3, 0.8, 0.3], vel: 0.6,
+    pe: { amt: 0, t: 0.1 },
+    l1: { w: "sine", rate: 5, delay: 0.3, pitch: 0, cut: 0, amp: 0, pan: 0, pw: 0 },
+    l2: { w: "triangle", rate: 0.3, delay: 0, pitch: 0, cut: 0, amp: 0, pan: 0, pw: 0 },
+    mode: "poly", glide: 0, bend: 2,
+    fx: { drive: 0, cho: 0, chr: 0.5, chd: 0.5, pha: 0, phr: 0.4, dly: 0, dlt: 0.35, dlf: 0.35, dpp: 1, rev: 0.2, rsz: 0.6 },
+    lvl: 0.7,
+  };
+  // Complète un son incomplet (anciens réglages, sons d'usine écrits en abrégé) avec les valeurs par défaut.
+  function norm(p) {
+    const q = JSON.parse(JSON.stringify(DEF)), s = p || {};
+    for (const k in s) if (!["o", "f", "pe", "l1", "l2", "fx"].includes(k)) q[k] = s[k];
+    for (const k of ["f", "pe", "l1", "l2", "fx"]) Object.assign(q[k], s[k] || {});
+    q.o = [0, 1, 2].map(i => Object.assign({ ...OSC0, on: i === 0 ? 1 : 0 }, (s.o || [])[i] || {}));
+    return q;
+  }
+  // ---- formes d'onde (tables de Fourier : sans repliement, comme un vrai oscillateur analogique)
+  const WNAMES = { sine: "Sinus", triangle: "Triangle", saw: "Scie", square: "Carré", pulse: "Impulsion", warm: "Scie douce", soft: "Ronde", hollow: "Creuse", organ: "Orgue", bell: "Cloche", vox: "Voix", digi: "Numérique" };
+  const WC = new WeakMap();
+  function wave(ac, w) {
+    let m = WC.get(ac); if (!m) WC.set(ac, m = {});
+    if (m[w]) return m[w];
+    const N = 96, re = new Float32Array(N), im = new Float32Array(N);
+    for (let k = 1; k < N; k++) {
+      im[k] = w === "saw" ? 1 / k : w === "warm" ? 1 / Math.pow(k, 1.6)
+        : w === "square" ? (k % 2 ? 1 / k : 0) : w === "soft" ? (k % 2 ? 1 / Math.pow(k, 1.7) : 0.25 / (k * k))
+        : w === "hollow" ? (k % 2 ? 1 / Math.pow(k, 1.3) : 0)
+        : w === "triangle" ? (k % 2 ? (((k - 1) / 2) % 2 ? -1 : 1) / (k * k) : 0)
+        : w === "organ" ? ([0, 1, .8, .5, .6, 0, .3, 0, .4][k] || 0)
+        : w === "bell" ? ([0, 1, 0, .5, 0, 0, .35, 0, 0, 0, .25, 0, 0, 0, 0, .15][k] || 0)
+        : w === "vox" ? Math.exp(-Math.pow((k * 130 - 700) / 380, 2)) + 0.6 * Math.exp(-Math.pow((k * 130 - 1200) / 300, 2)) + 0.25 * Math.exp(-Math.pow((k * 130 - 2600) / 400, 2)) + (k === 1 ? .5 : 0)
+        : w === "digi" ? (k < 40 ? Math.abs(Math.sin(k * 1.7)) / Math.sqrt(k) : 0)
+        : k === 1 ? 1 : 0;
+    }
+    return m[w] = ac.createPeriodicWave(re, im);
+  }
+  const NB = new WeakMap();
+  function noise(ac) {   // bruit blanc et bruit rose (2 s, en boucle)
+    if (NB.has(ac)) return NB.get(ac);
+    const L = ac.sampleRate * 2, b = ac.createBuffer(2, L, ac.sampleRate), w = b.getChannelData(0), p = b.getChannelData(1);
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < L; i++) { const x = Math.random() * 2 - 1; w[i] = x;
+      b0 = 0.99765 * b0 + x * 0.099046; b1 = 0.963 * b1 + x * 0.2965164; b2 = 0.57 * b2 + x * 1.0526913; p[i] = (b0 + b1 + b2 + x * 0.1848) * 0.2; }
+    NB.set(ac, b); return b;
+  }
+  // Courbes de saturation, gardées par quantité.
+  const SC = {};
+  function curve(k) { k = Math.round(k * 20) / 20; if (SC[k]) return SC[k];
+    const N = 1024, c = new Float32Array(N), d = 1 + k * 12;
+    for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1; c[i] = Math.tanh(d * x) / Math.tanh(d); } return SC[k] = c; }
+  const lfoType = w => (w === "saw" ? "sawtooth" : w === "square" ? "square" : w === "triangle" ? "triangle" : "sine");
+  // ---- une voix : sources → saturation → filtre(s) → volume (enveloppe) → panoramique → entrée de la partie
+  function voice(ac, P, n, vel, t0, dest, from) {
+    const nodes = [], f0 = hz(n), velA = 1 - P.vel + P.vel * Math.pow(vel, 1.5);
+    const amp = ac.createGain(); amp.gain.value = 0;
+    const pan = ac.createStereoPanner ? ac.createStereoPanner() : ac.createGain();
+    amp.connect(pan); pan.connect(dest);
+    const mix = ac.createGain(); mix.gain.value = 1;
+    let head = mix;
+    let shp = null;
+    if (P.f.drive > 0) { shp = ac.createWaveShaper(); shp.curve = curve(P.f.drive); shp.oversample = "2x"; mix.connect(shp); head = shp; }
+    // Filtre : 12 dB = un biquad, 24 dB = deux à la suite. Le suivi de clavier ouvre le filtre sur les notes aiguës,
+    // la vélocité l'ouvre quand on joue fort ; son enveloppe et le LFO passent par le « detune » (en cents).
+    const ft = P.f.t, bt = ft.startsWith("lp") ? "lowpass" : ft.startsWith("hp") ? "highpass" : ft === "bp" ? "bandpass" : ft === "notch" ? "notch" : "lowpass";
+    const nb = ft.endsWith("24") ? 2 : 1, bq = [];
+    const baseCut = () => Math.min(18000, Math.max(30, P.f.cut * Math.pow(2, P.f.key * (n - 60) / 12) * Math.pow(2, P.f.vel * (vel - 0.6) * 2.5)));
+    for (let i = 0; i < nb; i++) { const b = ac.createBiquadFilter(); b.type = bt; b.frequency.value = baseCut();
+      b.Q.value = bt === "lowpass" || bt === "highpass" ? 0.7 + P.f.res * (nb === 2 ? 11 : 18) * (i === nb - 1 ? 1 : 0.35) : 0.5 + P.f.res * 12;
+      head.connect(b); head = b; bq.push(b); }
+    head.connect(amp);
+    const kc = Math.max(0.4, 1 - P.f.res * 0.45);  // la résonance gonfle le volume : on compense un peu
+    // Une source de « cents » commune : enveloppe du filtre (± 6 octaves), LFO filtre.
+    const fd = ac.createConstantSource ? ac.createConstantSource() : null;
+    if (fd) { fd.offset.value = 0; bq.forEach(b => fd.connect(b.detune)); nodes.push(fd); }
+    // Hauteur commune : enveloppe de hauteur, glide, LFO hauteur, molette (cents) → detune de chaque oscillateur.
+    const pc = ac.createConstantSource ? ac.createConstantSource() : null; if (pc) nodes.push(pc);
+    const oscs = [];   // { o, ratio, dl, pw } : pour réaccorder en mono / legato
+    const pwBus = ac.createGain(); pwBus.gain.value = 1;   // LFO → largeur d'impulsion (secondes, mis à l'échelle par note)
+    const addOsc = (w, ratio, det, g, pn, pw) => {
+      const o = ac.createOscillator(), og = ac.createGain(); og.gain.value = g;
+      if (w === "pulse" || w === "square" && pw !== 0.5 && pw != null) {
+        // Impulsion à largeur variable = une scie moins la même scie retardée (pw / f) : la largeur se module.
+        o.setPeriodicWave(wave(ac, "saw"));
+        const dl = ac.createDelay(0.1), inv = ac.createGain(); inv.gain.value = -1;
+        dl.delayTime.value = Math.min(0.95, Math.max(0.05, pw)) / (f0 * ratio);
+        const pg = ac.createGain(); pg.gain.value = 1 / (f0 * ratio); pwBus.connect(pg); pg.connect(dl.delayTime);
+        o.connect(og); o.connect(dl); dl.connect(inv); inv.connect(og); oscs.push({ o, ratio, dl, pw, pg });
+      } else { o.setPeriodicWave(wave(ac, w)); o.connect(og); oscs.push({ o, ratio }); }
+      o.frequency.value = f0 * ratio; o.detune.value = det; if (pc) pc.connect(o.detune);
+      if (pn && ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pn; og.connect(p); p.connect(mix); } else og.connect(mix);
+      nodes.push(o); return o;
+    };
+    let o1 = [];
+    P.o.forEach((O, idx) => { if (!O.on || O.lvl <= 0) return;
+      const ratio = Math.pow(2, O.oct + O.semi / 12), u = Math.max(1, Math.min(7, O.uni | 0));
+      for (let k = 0; k < u; k++) { const x = u > 1 ? k / (u - 1) * 2 - 1 : 0;
+        const o = addOsc(O.w, ratio, O.fine + x * O.det, 0.45 * O.lvl / Math.sqrt(u), x * O.spr, O.w === "pulse" ? O.pw : O.w === "square" ? 0.5 : null);
+        if (idx === 0) o1.push({ o, ratio }); } });
+    if (P.sub > 0) addOsc("sine", Math.pow(2, (P.o[0].oct || 0) - 1), 0, 0.5 * P.sub, 0);
+    if (P.noise > 0) { const ns = ac.createBufferSource(); ns.buffer = noise(ac); ns.loop = true;
+      ns.loopStart = Math.random(); const sp = ac.createChannelSplitter(2), gw = ac.createGain(), gp = ac.createGain();
+      gw.gain.value = P.noise * 0.35 * (1 - P.ncol); gp.gain.value = P.noise * 0.9 * P.ncol;
+      ns.connect(sp); sp.connect(gw, 0); sp.connect(gp, 1); gw.connect(mix); gp.connect(mix); nodes.push(ns); }
+    // FM : un sinus à la hauteur de l'oscillateur 2 module la fréquence de l'oscillateur 1 (cloches, pianos FM, basses).
+    let fmG = null;
+    if (P.fm > 0 && o1.length) { const O2 = P.o[1], r2 = Math.pow(2, O2.oct + O2.semi / 12);
+      const m = ac.createOscillator(); m.frequency.value = f0 * r2; m.detune.value = O2.fine; if (pc) pc.connect(m.detune);
+      fmG = ac.createGain(); const idx = f0 * P.fm * 6 * (0.5 + 0.7 * vel);
+      // l'indice suit l'enveloppe du filtre : brillant à l'attaque, plus rond ensuite
+      const [fa, fdc, fs] = P.fe; fmG.gain.setValueAtTime(0, t0); fmG.gain.linearRampToValueAtTime(idx, t0 + Math.max(0.002, fa));
+      fmG.gain.setTargetAtTime(idx * (0.25 + 0.75 * fs), t0 + fa, Math.max(0.01, fdc) / 3);
+      m.connect(fmG); o1.forEach(x => fmG.connect(x.o.frequency)); nodes.push(m); }
+    // ---- LFO (chaque voix a les siens : leur retard part de la note)
+    const lfo = L => { if (!(L.pitch || L.cut || L.amp || L.pan || L.pw)) return null;
+      const o = ac.createOscillator(); o.type = lfoType(L.w); o.frequency.value = L.rate;
+      const fade = ac.createGain(); fade.gain.setValueAtTime(L.delay > 0 ? 0 : 1, t0); if (L.delay > 0) fade.gain.linearRampToValueAtTime(1, t0 + L.delay);
+      o.connect(fade); nodes.push(o);
+      const to = (amt, param) => { const g = ac.createGain(); g.gain.value = amt; fade.connect(g); g.connect(param); return g; };
+      const r = {};
+      if (L.pitch && pc) r.pitch = to(L.pitch, pc.offset);
+      if (L.cut && fd) r.cut = to(L.cut * 2400, fd.offset);
+      if (L.amp) { const tg = ac.createGain(); tg.gain.value = 1 - L.amp / 2; amp.disconnect(); amp.connect(tg); tg.connect(pan); r.amp = to(L.amp / 2, tg.gain); }
+      if (L.pan && pan.pan) r.pan = to(L.pan, pan.pan);
+      if (L.pw) r.pw = to(L.pw * 0.4, pwBus.gain.value !== undefined ? pwBus : pwBus);
+      return r; };
+    // le LFO → largeur d'impulsion passe par pwBus, une source à 0 sinon (pwBus sert d'entrée)
+    const pwSrc = ac.createConstantSource ? ac.createConstantSource() : null;
+    if (pwSrc) { pwSrc.offset.value = 0; pwSrc.connect(pwBus); nodes.push(pwSrc); }
+    pwBus.disconnect(); oscs.filter(x => x.pg).forEach(x => pwBus.connect(x.pg));
+    const lf1 = lfo(P.l1), lf2 = lfo(P.l2);
+    // ---- enveloppes
+    const [a, d, s, r] = P.ae, peak = P.lvl * velA * kc;
+    amp.gain.setValueAtTime(0, t0); amp.gain.linearRampToValueAtTime(peak, t0 + Math.max(0.002, a));
+    amp.gain.setTargetAtTime(Math.max(peak * s, 0.00001), t0 + Math.max(0.002, a), Math.max(0.005, d) / 3);
+    const envC = P.f.env * 6 * 1200;    // ± 6 octaves au maximum
+    if (fd && envC) { const [fa, fdc, fs] = P.fe; fd.offset.setValueAtTime(0, t0); fd.offset.linearRampToValueAtTime(envC, t0 + Math.max(0.002, fa));
+      fd.offset.setTargetAtTime(envC * fs, t0 + Math.max(0.002, fa), Math.max(0.005, fdc) / 3); }
+    if (pc) { let c0 = P.pe.amt * 100; if (from != null && P.glide > 0) c0 += (from - n) * 100;
+      if (c0) { pc.offset.setValueAtTime(c0, t0); pc.offset.setTargetAtTime(0, t0, Math.max(0.005, from != null && P.glide > 0 ? P.glide : P.pe.t) / 3); } }
+    nodes.forEach(x => x.start(t0));
+    let dead = false;
+    const V = { n, vel, t0, amp, bq, pc,
+      // réaccorder (mono / legato) avec le glide
+      retune(m, t, retrig) { const T = Math.max(ac.currentTime, t || 0), tc = Math.max(0.003, P.glide) / 3;
+        oscs.forEach(x => { x.o.frequency.setTargetAtTime(hz(m) * x.ratio, T, tc); if (x.dl) x.dl.delayTime.setTargetAtTime(Math.min(.95, Math.max(.05, x.pw)) / (hz(m) * x.ratio), T, tc); });
+        V.n = m; if (retrig) { const pk = P.lvl * velA * kc; amp.gain.cancelScheduledValues(T); amp.gain.setValueAtTime(amp.gain.value, T);
+          amp.gain.linearRampToValueAtTime(pk, T + Math.max(0.002, a)); amp.gain.setTargetAtTime(Math.max(pk * s, 0.00001), T + Math.max(0.002, a), Math.max(0.005, d) / 3); } },
+      // un réglage change pendant que la note est tenue : filtre, résonance, volume, LFO suivent tout de suite
+      live(Q) { const T = ac.currentTime; P = Q; bq.forEach((b, i) => { b.frequency.setTargetAtTime(baseCut(), T, 0.02);
+          if (b.type === "lowpass" || b.type === "highpass") b.Q.setTargetAtTime(0.7 + Q.f.res * (nb === 2 ? 11 : 18) * (i === nb - 1 ? 1 : 0.35), T, 0.02); });
+        if (fd && Q.f.env !== undefined) fd.offset.setTargetAtTime(Q.f.env * 6 * 1200 * Q.fe[2], T, 0.03);
+        amp.gain.setTargetAtTime(Math.max(Q.lvl * velA * kc * Q.ae[2], 0.00001), T, 0.03);
+        [[lf1, Q.l1], [lf2, Q.l2]].forEach(([l, L]) => { if (!l) return; if (l.pitch) l.pitch.gain.value = L.pitch; if (l.cut) l.cut.gain.value = L.cut * 2400; }); },
+      stop(rel) { if (dead) return; dead = true; const T = ac.currentTime, R = rel != null ? rel : Math.max(0.01, r);
+        amp.gain.cancelScheduledValues(T); amp.gain.setValueAtTime(amp.gain.value, T); amp.gain.setTargetAtTime(0, T, R / 4);
+        if (fd && envC) { fd.offset.cancelScheduledValues(T); fd.offset.setValueAtTime(fd.offset.value, T); fd.offset.setTargetAtTime(0, T, Math.max(0.01, P.fe[3]) / 4); }
+        const end = T + R * 1.8 + 0.05; nodes.forEach(x => { try { x.stop(end); } catch (e) {} });
+        setTimeout(() => { try { pan.disconnect(); } catch (e) {} }, (R * 1.8 + 0.3) * 1000); },
+      get dead() { return dead; } };
+    return V;
+  }
+  // ---- réverbe : réponse impulsionnelle stéréo calculée (taille = durée 0,6–6 s)
+  function irBuf(ac, size) { const sr = ac.sampleRate, sec = 0.6 + size * 5.4, L = Math.round(sr * sec), b = ac.createBuffer(2, L, sr);
+    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); let lp = 0;
+      for (let i = 0; i < L; i++) { const t = i / L, k = 0.2 + 0.75 * t; lp = lp * k + (Math.random() * 2 - 1) * (1 - k);
+        d[i] = lp * Math.pow(1 - t, 2.4) * (i < sr * 0.015 ? i / (sr * 0.015) : 1) * 2; } } return b; }
+  // ---- une partie : ses voix et sa chaîne d'effets. part.input reçoit les voix ; la sortie va vers dest.
+  function part(ac, dest, opt = {}) {
+    let P = norm(opt.preset);
+    const input = ac.createGain(), out = ac.createGain(); out.connect(dest);
+    // saturation (avec son mélange)
+    const dIn = ac.createGain(), dry = ac.createGain(), wet = ac.createGain(), sh = ac.createWaveShaper(), dOut = ac.createGain();
+    input.connect(dIn); dIn.connect(dry); dIn.connect(sh); sh.connect(wet); dry.connect(dOut); wet.connect(dOut); sh.oversample = "4x";
+    // chorus stéréo (deux retards qui ondulent, à gauche et à droite)
+    const chM = ac.createChannelMerger(2), chW = ac.createGain(), chOut = ac.createGain(), chL = [];
+    dOut.connect(chOut);
+    [[0.011, 1, 0], [0.016, 1.27, 1]].forEach(([dt, rk, side]) => { const dl = ac.createDelay(0.05); dl.delayTime.value = dt;
+      const o = ac.createOscillator(); o.frequency.value = 0.5; const g = ac.createGain(); g.gain.value = 0.002; o.connect(g); g.connect(dl.delayTime); o.start();
+      dOut.connect(dl); dl.connect(chM, 0, side); chL.push({ o, g, rk }); });
+    chM.connect(chW); chW.connect(chOut);
+    // phaser : 4 passe-tout dont la fréquence ondule
+    const phIn = chOut, phW = ac.createGain(), phOut = ac.createGain(); phIn.connect(phOut);
+    const phO = ac.createOscillator(), phG = ac.createGain(); phG.gain.value = 1400; phO.connect(phG); phO.start();
+    let ph = phIn; for (let i = 0; i < 4; i++) { const ap = ac.createBiquadFilter(); ap.type = "allpass"; ap.frequency.value = 500 + i * 450; ap.Q.value = 0.6; phG.connect(ap.detune); ph.connect(ap); ph = ap; }
+    ph.connect(phW); phW.connect(phOut);
+    // écho (ping-pong : gauche, droite, gauche…)
+    const dlIn = ac.createGain(), dA = ac.createDelay(2), dB = ac.createDelay(2), fb = ac.createGain(), fb2 = ac.createGain(), dW = ac.createGain(), dM = ac.createChannelMerger(2), dTone = ac.createBiquadFilter();
+    dTone.type = "lowpass"; dTone.frequency.value = 4500;
+    phOut.connect(dlIn); dlIn.connect(dTone); dTone.connect(dA); dA.connect(dM, 0, 0); dA.connect(fb2); fb2.connect(dB); dB.connect(dM, 0, 1); dB.connect(fb); fb.connect(dA);
+    dM.connect(dW);
+    // réverbe
+    const rv = ac.createConvolver(), rW = ac.createGain(); let rsz = -1;
+    phOut.connect(out); dW.connect(out); phOut.connect(rv); dW.connect(rv); rv.connect(rW); rW.connect(out);
+    let rT = null;
+    function fx(F) { const T = ac.currentTime, st = (p, v) => p.setTargetAtTime(v, T, 0.03);
+      if (F.drive > 0) { sh.curve = curve(F.drive); st(wet.gain, 0.5 + F.drive * 0.3); st(dry.gain, 1 - Math.min(1, F.drive * 1.5)); } else { st(wet.gain, 0); st(dry.gain, 1); }
+      st(chW.gain, F.cho * 0.9); st(chOut.gain, 1); chL.forEach(c => { c.o.frequency.value = (0.1 + F.chr * 2.5) * c.rk; c.g.gain.value = 0.0005 + F.chd * 0.004; });
+      st(phW.gain, F.pha * 0.9); st(phOut.gain, 1 - F.pha * 0.3); phO.frequency.value = 0.05 + F.phr * 3;
+      st(dlIn.gain, F.dly > 0 ? 1 : 0); st(dW.gain, F.dly * 0.8); dA.delayTime.setTargetAtTime(F.dlt, T, 0.05); dB.delayTime.setTargetAtTime(F.dlt, T, 0.05);
+      st(fb.gain, F.dlf * 0.9); st(fb2.gain, F.dpp ? 1 : 0); dB.delayTime.value = F.dpp ? F.dlt : 0.001;
+      st(rW.gain, F.rev * 1.2);
+      if (Math.abs(F.rsz - rsz) > 0.04) { clearTimeout(rT); rT = setTimeout(() => { rsz = F.rsz; rv.buffer = irBuf(ac, F.rsz); }, rsz < 0 ? 0 : 250); } }
+    fx(P.fx);
+    // ---- les notes
+    const voices = [];   // voix qui sonnent (poly)
+    let mono = null, stack = [], last = null, bend = 0;
+    const M = { input, out, get preset() { return P; },
+      set(p) { P = norm(p); fx(P.fx); voices.forEach(v => !v.dead && v.live(P)); if (mono && !mono.dead) mono.live(P); },
+      on(n, vel = 0.8, at = 0, dst) { const t = Math.max(ac.currentTime, at || 0);
+        const isMono = P.mode !== "poly" && !opt.poly;
+        if (isMono) { stack = stack.filter(x => x !== n); stack.push(n);
+          if (mono && !mono.dead) { mono.retune(n, t, P.mode === "mono"); }
+          else { mono = voice(ac, P, n, vel, t, dst || input, last); applyBend(mono); }
+          last = n; const h = { n, stop: r => M.off(n, r) }; return h; }
+        const v = voice(ac, P, n, vel, t, dst || input, P.glide > 0 ? last : null); applyBend(v); last = n;
+        voices.push(v); if (voices.length > 24) voices.shift().stop(0.05);
+        return { n, stop: r => { v.stop(r); const i = voices.indexOf(v); if (i >= 0) voices.splice(i, 1); }, voice: v }; },
+      off(n, r) { if (P.mode !== "poly" && !opt.poly) { stack = stack.filter(x => x !== n);
+          if (!mono) return; if (stack.length) { if (mono.n === n) mono.retune(stack[stack.length - 1], 0, false); } else { mono.stop(r); mono = null; } return; }
+        voices.filter(v => v.n === n).forEach(v => v.stop(r)); for (let i = voices.length - 1; i >= 0; i--) if (voices[i].n === n) voices.splice(i, 1); },
+      bend(x) { bend = x; voices.forEach(applyBend); if (mono) applyBend(mono); },   // −1…1 (molette)
+      panic() { voices.forEach(v => v.stop(0.03)); voices.length = 0; if (mono) mono.stop(0.03); mono = null; stack = []; },
+      get active() { return voices.length + (mono ? 1 : 0); } };
+    function applyBend(v) { if (!v || !v.pc || (bend === 0 && !v._b)) return; v._b = 1; /* la molette s'ajoute à la hauteur commune */ v.pc.offset.setTargetAtTime(bend * P.bend * 100, ac.currentTime, 0.01); }
+    return M;
+  }
+  // ---- les sons d'usine (abrégés : ce qui n'est pas écrit prend la valeur par défaut)
+  const O = (w, x = {}) => ({ on: 1, w, ...x });
+  const FACT = {
+    // Nappes
+    jupiter: { name: "Nappe Jupiter", cat: "Nappes", o: [O("saw", { uni: 4, det: 14, lvl: .6 }), O("saw", { oct: -1, fine: 6, lvl: .35 })], f: { t: "lp24", cut: 1800, res: .15, env: .25, key: .4 }, fe: [1.2, 2, .4, 1.5], ae: [.7, 1, .9, 1.8], l2: { w: "triangle", rate: .25, cut: .12 }, fx: { cho: .6, rev: .4, rsz: .75 } },
+    soie: { name: "Nappe de soie", cat: "Nappes", o: [O("warm", { uni: 3, det: 9 }), O("soft", { oct: 1, lvl: .2, fine: -5 })], f: { t: "lp12", cut: 2500, env: .15 }, fe: [2, 2, .6, 2], ae: [1.4, 1, .95, 2.5], fx: { cho: .7, rev: .5, rsz: .8, dly: .15, dlt: .5 } },
+    eveil: { name: "Nappe qui s'ouvre", cat: "Nappes", o: [O("saw", { uni: 5, det: 18 })], f: { t: "lp24", cut: 500, res: .3, env: .45, key: .3 }, fe: [3.5, 3, .7, 2], ae: [.8, 1, .9, 2], fx: { cho: .4, pha: .25, rev: .5 } },
+    verre: { name: "Nappe de verre", cat: "Nappes", o: [O("sine"), O("sine", { oct: 1, semi: 7, lvl: .3 })], fm: .12, f: { t: "lp12", cut: 7000 }, fe: [1.5, 3, .4, 2], ae: [1, 2, .8, 2.5], l1: { rate: .2, amp: .15, delay: 0 }, fx: { cho: .5, rev: .55, rsz: .85, dly: .2 } },
+    choeur: { name: "Chœur synthé", cat: "Nappes", o: [O("vox", { uni: 3, det: 10 }), O("vox", { oct: 1, lvl: .25 })], f: { t: "lp12", cut: 4000 }, ae: [.5, 1, .9, 1.4], l1: { rate: 5, delay: .6, pitch: 8 }, fx: { cho: .6, rev: .5 } },
+    sombre: { name: "Nappe sombre", cat: "Nappes", o: [O("saw", { uni: 3, det: 10 }), O("square", { oct: -1, lvl: .4 })], sub: .3, f: { t: "lp24", cut: 700, res: .2, env: .1 }, ae: [1.5, 1, .95, 2.5], l2: { rate: .12, cut: .2 }, fx: { cho: .5, rev: .5, rsz: .9 } },
+    cordes: { name: "Cordes Solina", cat: "Cordes", o: [O("saw", { uni: 3, det: 8 }), O("saw", { oct: 1, lvl: .25, uni: 2, det: 6 })], f: { t: "lp12", cut: 3500, key: .6 }, ae: [.35, 1, .9, .9], l1: { rate: 5.2, delay: .4, pitch: 6 }, fx: { cho: .9, chr: .7, chd: .7, rev: .35 } },
+    cordes2: { name: "Cordes lentes", cat: "Cordes", o: [O("warm", { uni: 5, det: 12 })], f: { t: "lp24", cut: 2800, env: .15 }, fe: [1, 1, .6, 1], ae: [1, 1, .92, 1.6], l1: { rate: 4.8, delay: .8, pitch: 5 }, fx: { cho: .5, rev: .45, rsz: .7 } },
+    // Cuivres
+    cuivres80: { name: "Cuivres 80", cat: "Cuivres", o: [O("saw", { uni: 2, det: 10 }), O("saw", { fine: 8, lvl: .5 })], f: { t: "lp24", cut: 900, res: .15, env: .5, vel: .6 }, fe: [.08, .5, .45, .3], ae: [.04, .3, .85, .3], fx: { cho: .3, rev: .3 } },
+    obxbrass: { name: "Cuivres OB", cat: "Cuivres", o: [O("saw", { fine: -7 }), O("saw", { fine: 7 })], f: { t: "lp12", cut: 1100, res: .1, env: .45, vel: .5 }, fe: [.12, .6, .5, .4], ae: [.06, .4, .85, .35], pe: { amt: -.3, t: .08 }, fx: { cho: .25, rev: .3 } },
+    cuivredoux: { name: "Cuivre feutré solo", cat: "Cuivres", mode: "legato", glide: .05, o: [O("warm"), O("pulse", { pw: .3, lvl: .25, fine: 4 })], noise: .03, f: { t: "lp12", cut: 900, env: .4, vel: .7 }, fe: [.06, .4, .5, .2], ae: [.04, .3, .85, .2], l1: { rate: 5.2, delay: .45, pitch: 12 }, fx: { rev: .3 } },
+    // Leads
+    leadmoog: { name: "Lead Moog", cat: "Leads", mode: "legato", glide: .06, o: [O("saw"), O("saw", { fine: 9, lvl: .6 }), O("square", { on: 1, oct: -1, lvl: .4 })], f: { t: "lp24", cut: 1200, res: .35, env: .35, vel: .4 }, fe: [.01, .4, .4, .3], ae: [.005, .3, .85, .2], l1: { rate: 5.5, delay: .5, pitch: 10 }, fx: { dly: .2, dlt: .32, rev: .2 } },
+    leadsquare: { name: "Lead carré PWM", cat: "Leads", mode: "legato", glide: .04, o: [O("pulse", { pw: .5 })], f: { t: "lp12", cut: 3000, env: .2 }, ae: [.005, .2, .9, .15], l1: { rate: 5, delay: .4, pitch: 10 }, l2: { rate: .6, pw: .5 }, fx: { dly: .25, dlt: .38, rev: .25 } },
+    leadsync: { name: "Lead criard", cat: "Leads", mode: "legato", glide: .03, o: [O("saw", { uni: 3, det: 8 }), O("square", { oct: 1, lvl: .3 })], fm: .15, f: { t: "lp24", cut: 2500, res: .45, env: .3 }, fe: [.01, .3, .5, .2], ae: [.005, .2, .9, .2], fx: { drive: .3, dly: .3, rev: .25 } },
+    flutesyn: { name: "Flûte synthé", cat: "Leads", mode: "legato", glide: .03, o: [O("triangle"), O("sine", { oct: 1, lvl: .15 })], noise: .08, ncol: .2, f: { t: "lp12", cut: 3500 }, ae: [.05, .2, .9, .15], l1: { rate: 5, delay: .3, pitch: 14 }, fx: { rev: .35 } },
+    lead_vangelis: { name: "Lead Vangelis", cat: "Leads", o: [O("saw", { uni: 2, det: 6 }), O("pulse", { pw: .3, lvl: .4 })], f: { t: "lp24", cut: 1400, res: .2, env: .4, vel: .8 }, fe: [.15, .8, .5, .6], ae: [.08, .6, .85, .8], l1: { rate: 5.5, delay: .7, pitch: 15 }, fx: { cho: .3, rev: .6, rsz: .85 } },
+    // Basses
+    bassemoog: { name: "Basse Moog", cat: "Basses", mode: "mono", o: [O("saw", { oct: -1 }), O("square", { oct: -1, fine: 5, lvl: .5 })], sub: .4, f: { t: "lp24", cut: 300, res: .3, env: .45, key: .3 }, fe: [.003, .25, .2, .2], ae: [.003, .3, .8, .12], fx: { rev: 0 } },
+    basse303: { name: "Basse acide", cat: "Basses", mode: "legato", glide: .06, o: [O("saw", { oct: -1 })], f: { t: "lp24", cut: 350, res: .75, env: .6, vel: .5 }, fe: [.003, .25, 0, .1], ae: [.003, .4, .7, .1], fx: { drive: .3, dly: .15, rev: 0 } },
+    bassefm: { name: "Basse FM", cat: "Basses", o: [O("sine", { oct: -1 }), O("sine", { on: 0, oct: -1 })], fm: .35, f: { t: "lp12", cut: 4000 }, fe: [.002, .3, .2, .1], ae: [.002, .5, .6, .1], fx: { rev: 0 } },
+    bassesub: { name: "Basse sub ronde", cat: "Basses", o: [O("triangle", { oct: -1 })], sub: .7, f: { t: "lp12", cut: 900 }, ae: [.005, .3, .9, .1], fx: { drive: .15, rev: 0 } },
+    reese: { name: "Basse Reese", cat: "Basses", o: [O("saw", { oct: -1, uni: 2, det: 25 })], sub: .3, f: { t: "lp24", cut: 800, res: .2 }, ae: [.005, .4, .9, .15], l2: { rate: .3, cut: .15 }, fx: { drive: .2, cho: .2, rev: 0 } },
+    // Plucks et arpèges
+    pluck: { name: "Pluck brillant", cat: "Plucks", o: [O("saw", { uni: 3, det: 12 })], f: { t: "lp24", cut: 600, res: .2, env: .55 }, fe: [.002, .25, 0, .2], ae: [.002, .45, 0, .3], fx: { dly: .3, dlt: .375, rev: .3 } },
+    harpe: { name: "Harpe synthé", cat: "Plucks", o: [O("triangle"), O("saw", { lvl: .25, oct: 1 })], f: { t: "lp12", cut: 1500, env: .4 }, fe: [.002, .6, 0, .5], ae: [.002, 1.4, 0, 1], fx: { cho: .3, rev: .45 } },
+    arpcristal: { name: "Arpège cristal", cat: "Plucks", o: [O("sine"), O("sine", { on: 0, oct: 2 })], fm: .2, f: { t: "lp12", cut: 9000 }, fe: [.002, .3, 0, .3], ae: [.002, .5, 0, .4], fx: { dly: .4, dlt: .25, dlf: .45, rev: .35 } },
+    stab: { name: "Stab house", cat: "Plucks", o: [O("saw", { uni: 3, det: 15 }), O("square", { lvl: .4 })], f: { t: "lp24", cut: 900, res: .3, env: .5 }, fe: [.002, .2, 0, .1], ae: [.002, .3, 0, .15], fx: { cho: .3, rev: .3 } },
+    // Claviers
+    fmep: { name: "Piano FM", cat: "Claviers", o: [O("sine"), O("sine", { on: 0 })], fm: .25, f: { t: "lp12", cut: 12000 }, fe: [.002, 1.2, .1, .4], ae: [.003, 2, .2, .4], l1: { rate: 4.5, amp: .12, delay: 0 }, fx: { cho: .3, rev: .3 } },
+    orgue: { name: "Orgue à tirettes", cat: "Claviers", o: [O("organ"), O("sine", { oct: -1, lvl: .4 })], f: { t: "lp12", cut: 8000 }, ae: [.005, .1, 1, .05], l1: { rate: 6.5, delay: 0, amp: .08, pitch: 3 }, fx: { drive: .15, cho: .4, chr: .8, rev: .25 } },
+    clavi: { name: "Clavinet synthé", cat: "Claviers", o: [O("pulse", { pw: .15 }), O("pulse", { pw: .3, oct: 1, lvl: .3 })], f: { t: "bp", cut: 1500, res: .2, env: .4 }, fe: [.001, .2, .1, .1], ae: [.002, .4, .3, .08], fx: { pha: .3, rev: .15 } },
+    // Cloches et percussions
+    cloches: { name: "Cloches DX", cat: "Cloches", o: [O("sine"), O("sine", { on: 0, semi: 5, oct: 1, fine: 30 })], fm: .4, f: { t: "lp12", cut: 12000 }, fe: [.002, 2, 0, 1.5], ae: [.002, 3, 0, 2], fx: { rev: .45, rsz: .8 } },
+    vibra: { name: "Vibraphone synthé", cat: "Cloches", o: [O("sine"), O("sine", { oct: 2, lvl: .15 })], ae: [.002, 2.5, 0, 1], l1: { rate: 5.5, amp: .35, delay: 0 }, fx: { rev: .35 } },
+    kalimba: { name: "Kalimba", cat: "Cloches", o: [O("sine"), O("triangle", { semi: 29, lvl: .12 })], ae: [.001, .9, 0, .4], fx: { rev: .3, dly: .1 } },
+    // Ambiances et effets
+    nuage: { name: "Nuage", cat: "Ambiances", o: [O("warm", { uni: 6, det: 25, spr: 1 })], noise: .1, ncol: .9, f: { t: "lp12", cut: 1500, env: .2 }, fe: [4, 3, .6, 4], ae: [3, 2, .9, 4], l2: { rate: .08, cut: .3, pan: .4 }, fx: { cho: .6, pha: .3, dly: .3, dlt: .6, dlf: .55, rev: .8, rsz: 1 } },
+    vent: { name: "Vent", cat: "Ambiances", o: [O("sine", { on: 0 })], noise: .8, ncol: .6, f: { t: "bp", cut: 900, res: .6 }, ae: [1.5, 1, .9, 2.5], l2: { rate: .15, cut: .5, pan: .6 }, fx: { rev: .6, rsz: .9 } },
+    sciencefic: { name: "Science-fiction", cat: "Ambiances", o: [O("square"), O("saw", { semi: 7, lvl: .5 })], fm: .2, f: { t: "lp24", cut: 1500, res: .6 }, l1: { w: "square", rate: 8, delay: 0, cut: .4 }, l2: { rate: .2, pitch: 30 }, ae: [.3, 1, .9, 1.5], fx: { pha: .5, dly: .4, rev: .5 } },
+    drone: { name: "Bourdon", cat: "Ambiances", o: [O("saw", { oct: -1, uni: 3, det: 6 }), O("saw", { semi: 7, lvl: .4 })], sub: .3, f: { t: "lp24", cut: 600, res: .4 }, l2: { rate: .05, cut: .5 }, ae: [2, 1, 1, 3], fx: { pha: .4, rev: .6, rsz: 1 } },
+  };
+  const LV = {"jupiter": 1.161, "soie": 0.813, "eveil": 1.189, "verre": 0.989, "choeur": 1.274, "sombre": 0.741, "cordes": 0.933, "cordes2": 0.902, "cuivres80": 0.891, "obxbrass": 0.933, "cuivredoux": 1.622, "leadmoog": 1.334, "leadsquare": 1.259, "leadsync": 0.603, "flutesyn": 1.862, "lead_vangelis": 0.851, "bassemoog": 1.135, "basse303": 1.047, "bassefm": 1.059, "bassesub": 0.556, "reese": 0.596, "pluck": 0.861, "harpe": 1.531, "arpcristal": 1.496, "stab": 0.661, "fmep": 0.624, "orgue": 0.617, "clavi": 4.169, "cloches": 1.084, "vibra": 1.585, "kalimba": 1.303, "nuage": 2.541, "vent": 10.0, "sciencefic": 0.785, "drone": 1.396};   // niveaux mesurés (−18 dB efficaces, crêtes ≤ −2 dB)
+  for (const k in FACT) FACT[k] = norm(FACT[k]);
+  for (const k in LV) FACT[k].lvl *= LV[k];
+  // Les sons à moi : dans le navigateur (même adresse pour la page Synthé et Création), clé « synthe-sons ».
+  const LS = "synthe-sons";
+  function mine() { try { return JSON.parse(localStorage.getItem(LS) || "[]").map(p => ({ ...norm(p), id: p.id })); } catch (e) { return []; } }
+  function saveMine(list) { try { localStorage.setItem(LS, JSON.stringify(list)); } catch (e) {} }
+  function get(id) { if (FACT[id]) return FACT[id]; const m = mine().find(p => p.id === id); return m || null; }
+  return { DEF, FACT, WNAMES, norm, part, voice, mine, saveMine, get, LS, hz };
+})();
+
+</script>
+<script>
+// ================================================================== page Synthé
+const $ = id => document.getElementById(id);
+const clone = o => JSON.parse(JSON.stringify(o));
+const ST_KEY = "synthe-etat";
+let ST = (() => { try { return JSON.parse(localStorage.getItem(ST_KEY) || "{}"); } catch (e) { return {}; } })();
+ST = Object.assign({ id: "jupiter", oct: 0, tab: "osc", hold: false, chord: false }, ST);
+// Sons gardés côté Linux (?sons=…, recopiés par la page Synthé du launcher) : un navigateur vidé les retrouve.
+try { const q = new URLSearchParams(location.search).get("sons"); if (q) { const ext = JSON.parse(q), cur = SY.mine();
+  let add = 0; (Array.isArray(ext) ? ext : []).forEach(p => { if (p && p.id && !cur.some(x => x.id === p.id)) { cur.push(p); add++; } }); if (add) SY.saveMine(cur); } } catch (e) {}
+let P = SY.norm(ST.cur || SY.get(ST.id) || SY.FACT.jupiter);
+let curId = ST.id;                 // le son d'où vient P (usine ou à moi) ; P peut avoir été modifié depuis
+let dirty = !!ST.dirty;
+const saveST = () => { try { localStorage.setItem(ST_KEY, JSON.stringify({ ...ST, id: curId, cur: P, dirty })); } catch (e) {} };
+function mirror() { try { document.title = "syn|" + JSON.stringify(SY.mine()); } catch (e) {} }
+
+// ---- audio
+let ac = null, part = null, an = null;
+function audio() {
+  if (ac) { if (ac.state === "suspended") ac.resume(); return; }
+  ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+  const master = ac.createGain(); master.gain.value = 0.9;
+  const comp = ac.createDynamicsCompressor(); comp.threshold.value = -12; comp.knee.value = 8; comp.ratio.value = 4; comp.attack.value = 0.01; comp.release.value = 0.2;
+  const lim = ac.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 1; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.15;
+  an = ac.createAnalyser(); an.fftSize = 2048;
+  master.connect(comp); comp.connect(lim); lim.connect(ac.destination); lim.connect(an);
+  part = SY.part(ac, master, { preset: P });
+  drawScope();
+}
+
+// ---- description des commandes : [chemin, libellé, min, max, échelle, format]
+const fT = v => v < 1 ? Math.round(v * 1000) + " ms" : v.toFixed(2) + " s";
+const fP = v => Math.round(v * 100) + " %";
+const fS = v => (v > 0 ? "+" : "") + Math.round(v * 100) + " %";
+const fHz = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + " kHz" : Math.round(v) + " Hz";
+const fR = v => v < 1 ? v.toFixed(2) + " Hz" : v.toFixed(1) + " Hz";
+const fI = u => v => (v > 0 && u !== "" ? "+" : "") + Math.round(v) + u;
+const WAVES = ["saw", "warm", "square", "pulse", "triangle", "sine", "soft", "hollow", "organ", "vox", "bell", "digi"];
+const ENVS = [["a", "Attaque"], ["d", "Déclin"], ["s", "Maintien"], ["r", "Relâche"]];
+const getP = path => path.split(".").reduce((o, k) => o[k], P);
+const setP = (path, v) => { const ks = path.split("."), last = ks.pop(); ks.reduce((o, k) => o[k], P)[last] = v; };
+const C = (path, l, min, max, sc, fmt, step) => ({ path, l, min, max, sc: sc || "lin", fmt: fmt || (v => v.toFixed(2)), step });
+const envCtl = base => [C(base + ".0", "Attaque", 0.001, 10, "log", fT), C(base + ".1", "Déclin", 0.005, 10, "log", fT), C(base + ".2", "Maintien", 0, 1, "lin", fP), C(base + ".3", "Relâche", 0.01, 12, "log", fT)];
+const lfoCtl = b => [C(b + ".rate", "Vitesse", 0.02, 20, "log", fR), C(b + ".delay", "Arrivée progressive", 0, 4, "lin", fT),
+  C(b + ".pitch", "→ Hauteur (vibrato)", 0, 200, "sq", fI(" ct")), C(b + ".cut", "→ Filtre", -1, 1, "lin", fS), C(b + ".amp", "→ Volume (trémolo)", 0, 1, "lin", fP),
+  C(b + ".pan", "→ Gauche/droite", 0, 1, "lin", fP), C(b + ".pw", "→ Largeur d'impulsion", 0, 1, "lin", fP)];
+const TABS = [["osc", "OSCILL."], ["filtre", "FILTRE"], ["env", "ENVEL."], ["lfo", "LFO"], ["fx", "EFFETS"], ["jeu", "JEU"]];
+
+function toT(c, v) { if (c.sc === "log") return Math.log(v / c.min) / Math.log(c.max / c.min); if (c.sc === "sq") return Math.sqrt((v - c.min) / (c.max - c.min)); return (v - c.min) / (c.max - c.min); }
+function fromT(c, t) { let v = c.sc === "log" ? c.min * Math.pow(c.max / c.min, t) : c.sc === "sq" ? c.min + (c.max - c.min) * t * t : c.min + (c.max - c.min) * t;
+  if (c.step) v = Math.round(v / c.step) * c.step; return v; }
+function slider(c) {
+  const v = getP(c.path), t = Math.max(0, Math.min(1, toT(c, v)));
+  return `<div class="ctl"><label>${c.l}<span data-v="${c.path}">${c.fmt(v)}</span></label><input type="range" min="0" max="1000" value="${Math.round(t * 1000)}" data-c="${c.path}" style="--p:${t * 100}%"></div>`;
+}
+const CTLS = {};   // chemin → commande (pour les curseurs affichés)
+function card(title, ctls, extra = "", sw = null, off = false) {
+  ctls.forEach(c => CTLS[c.path] = c);
+  return `<div class="card ${off ? "off" : ""}"><h3>${title}${sw || ""}</h3>${extra}<div class="grid">${ctls.map(slider).join("")}</div></div>`;
+}
+const chips = (key, opts, cur) => `<div class="chips">${opts.map(([v, l]) => `<button data-k="${key}" data-val="${v}" class="${String(cur) === String(v) ? "on" : ""}">${l}</button>`).join("")}</div>`;
+const sw = (key, on) => `<button class="pill sm sw ${on ? "on" : ""}" data-tog="${key}">${on ? "Marche" : "Arrêt"}</button>`;
+
+function renderPanel() {
+  for (const k in CTLS) delete CTLS[k];
+  let h = "";
+  if (ST.tab === "osc") {
+    P.o.forEach((O, i) => {
+      const cs = [C(`o.${i}.lvl`, "Niveau", 0, 1, "lin", fP), C(`o.${i}.oct`, "Octave", -3, 3, "lin", fI(""), 1), C(`o.${i}.semi`, "Demi-tons", -12, 12, "lin", fI(""), 1),
+        C(`o.${i}.fine`, "Désaccord fin", -50, 50, "lin", fI(" ct"), 1), C(`o.${i}.uni`, "Unisson (voix)", 1, 7, "lin", v => Math.round(v) + "", 1)];
+      if (O.uni > 1) cs.push(C(`o.${i}.det`, "Écart de l'unisson", 0, 60, "lin", fI(" ct"), 1), C(`o.${i}.spr`, "Largeur stéréo", 0, 1, "lin", fP));
+      if (O.w === "pulse") cs.push(C(`o.${i}.pw`, "Largeur d'impulsion", 0.05, 0.95, "lin", fP));
+      h += card(`OSCILLATEUR ${i + 1}`, cs, chips(`o.${i}.w`, WAVES.map(w => [w, SY.WNAMES[w]]), O.w), sw(`o.${i}.on`, O.on), !O.on);
+    });
+    h += card("SOURCES EN PLUS", [C("sub", "Sous-oscillateur (−1 oct.)", 0, 1, "lin", fP), C("noise", "Bruit", 0, 1, "sq", fP), C("ncol", "Bruit blanc → rose", 0, 1, "lin", fP),
+      C("fm", "FM : osc. 2 module osc. 1", 0, 1, "sq", fP)], `<div class="lbl" style="margin:0">La FM prend la hauteur de l'oscillateur 2 (même éteint) : rapports simples = sons de piano FM, de basse ; rapports bizarres = cloches.</div>`);
+  } else if (ST.tab === "filtre") {
+    h += card("FILTRE", [C("f.cut", "Fréquence de coupure", 30, 18000, "log", fHz), C("f.res", "Résonance", 0, 1, "lin", fP), C("f.env", "Enveloppe →", -1, 1, "lin", fS),
+      C("f.key", "Suivi du clavier", 0, 1, "lin", fP), C("f.vel", "Vélocité → filtre", 0, 1, "lin", fP), C("f.drive", "Saturation avant filtre", 0, 1, "lin", fP)],
+      chips("f.t", [["lp24", "Passe-bas 24 dB"], ["lp12", "Passe-bas 12 dB"], ["hp24", "Passe-haut 24"], ["hp12", "Passe-haut 12"], ["bp", "Passe-bande"], ["notch", "Coupe-bande"]], P.f.t));
+    h += card("ENVELOPPE DU FILTRE", envCtl("fe"), `<canvas class="env" id="cvFe"></canvas>`);
+  } else if (ST.tab === "env") {
+    h += card("ENVELOPPE DU VOLUME", envCtl("ae"), `<canvas class="env" id="cvAe"></canvas>`);
+    h += card("VOLUME ET TOUCHER", [C("lvl", "Niveau du son", 0, 1.5, "lin", fP), C("vel", "Sensibilité à la force", 0, 1, "lin", fP)]);
+    h += card("ENVELOPPE DE HAUTEUR", [C("pe.amt", "Départ (demi-tons)", -24, 24, "lin", v => (v > 0 ? "+" : "") + v.toFixed(1)), C("pe.t", "Durée", 0.005, 2, "log", fT)],
+      `<div class="lbl" style="margin:0">La note part plus haut ou plus bas et glisse vers sa hauteur : cuivres (−0,3), tom synthé, effets.</div>`);
+  } else if (ST.tab === "lfo") {
+    const lw = [["sine", "Sinus"], ["triangle", "Triangle"], ["saw", "Scie"], ["square", "Carré"]];
+    h += card("LFO 1", lfoCtl("l1"), chips("l1.w", lw, P.l1.w));
+    h += card("LFO 2", lfoCtl("l2"), chips("l2.w", lw, P.l2.w));
+  } else if (ST.tab === "fx") {
+    h += card("SATURATION", [C("fx.drive", "Quantité", 0, 1, "lin", fP)]);
+    h += card("CHORUS", [C("fx.cho", "Dosage", 0, 1, "lin", fP), C("fx.chr", "Vitesse", 0, 1, "lin", fP), C("fx.chd", "Profondeur", 0, 1, "lin", fP)]);
+    h += card("PHASER", [C("fx.pha", "Dosage", 0, 1, "lin", fP), C("fx.phr", "Vitesse", 0, 1, "lin", fP)]);
+    h += card("ÉCHO", [C("fx.dly", "Dosage", 0, 1, "lin", fP), C("fx.dlt", "Temps", 0.03, 1.5, "log", fT), C("fx.dlf", "Répétitions", 0, 0.95, "lin", fP)], chips("fx.dpp", [[1, "Ping-pong"], [0, "Centre"]], P.fx.dpp));
+    h += card("RÉVERBE", [C("fx.rev", "Dosage", 0, 1, "lin", fP), C("fx.rsz", "Taille de la salle", 0, 1, "lin", fP)]);
+  } else {
+    h += card("JEU", [C("glide", "Glide (portamento)", 0, 1.5, "sq", fT), C("bend", "Molette : écart", 0, 12, "lin", v => Math.round(v) + " demi-tons", 1)],
+      chips("mode", [["poly", "Polyphonique"], ["mono", "Mono"], ["legato", "Legato"]], P.mode) +
+      `<div class="lbl" style="margin:0">Mono : une note à la fois, chaque note relance l'enveloppe. Legato : les notes liées glissent sans relancer (solos, basses). Le glide marche aussi en polyphonique. Dans Création, les accords restent toujours polyphoniques.</div>`);
+  }
+  $("panel").innerHTML = h;
+  drawEnvs();
+}
+function renderTabs() { $("tabs").innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}" class="${ST.tab === k ? "on" : ""}">${l}</button>`).join(""); }
+function renderHead() {
+  const src = SY.FACT[curId] ? "usine" : SY.mine().some(p => p.id === curId) ? "à moi" : "";
+  $("pn").textContent = P.name + (dirty ? " *" : "");
+  $("pc").textContent = P.cat + (src ? " · " + src : "") + (dirty ? " · modifié" : "");
+  $("octV").textContent = (ST.oct > 0 ? "+" : "") + ST.oct;
+  $("hold").classList.toggle("on", ST.hold); $("chord").classList.toggle("on", ST.chord);
+}
+// Dessin des enveloppes (attaque, déclin, maintien tenu 1 s, relâche) avec une échelle de temps douce.
+function drawEnvs() {
+  [["cvFe", P.fe], ["cvAe", P.ae]].forEach(([id, e]) => { const cv = $(id); if (!cv) return;
+    const w = cv.clientWidth * devicePixelRatio, hh = cv.clientHeight * devicePixelRatio; cv.width = w; cv.height = hh; const g = cv.getContext("2d");
+    const sc = t => Math.sqrt(t), [a, d, s, r] = e, tot = sc(a) + sc(d * 1.5) + sc(0.6) + sc(r * 1.5), kx = (w - 12) / tot, y = v => hh - 6 - v * (hh - 12);
+    let x = 6; g.strokeStyle = "#F5B342"; g.lineWidth = 2.5 * devicePixelRatio; g.fillStyle = "#F5B34222"; g.beginPath(); g.moveTo(x, y(0));
+    x += sc(a) * kx; g.lineTo(x, y(1));
+    const xd = x + sc(d * 1.5) * kx; for (let i = 1; i <= 20; i++) { const u = i / 20; g.lineTo(x + (xd - x) * u, y(s + (1 - s) * Math.exp(-u * 4.5))); } x = xd;
+    x += sc(0.6) * kx; g.lineTo(x, y(s));
+    const xr = x + sc(r * 1.5) * kx; for (let i = 1; i <= 20; i++) { const u = i / 20; g.lineTo(x + (xr - x) * u, y(s * Math.exp(-u * 4.5))); }
+    g.lineTo(xr, y(0)); g.stroke(); g.lineTo(6, y(0)); g.fill(); });
+}
+// ---- annuler (30 pas)
+const UNDO = [];
+function snap() { UNDO.push(clone(P)); if (UNDO.length > 30) UNDO.shift(); }
+function changed(full) { dirty = true; if (part) part.set(P); saveST(); renderHead(); if (full) renderPanel(); else drawEnvs(); }
+
+$("panel").addEventListener("pointerdown", e => { if (e.target.matches("input[type=range]")) snap(); });
+$("panel").addEventListener("input", e => { const el = e.target; if (!el.dataset.c) return; const c = CTLS[el.dataset.c]; const v = fromT(c, el.value / 1000);
+  setP(c.path, v); el.style.setProperty("--p", el.value / 10 + "%"); const sp = document.querySelector(`[data-v="${c.path}"]`); if (sp) sp.textContent = c.fmt(v);
+  changed(false); });
+$("panel").addEventListener("change", e => { const el = e.target; if (el.dataset.c && /\.uni$/.test(el.dataset.c)) renderPanel(); });
+$("panel").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.k) { snap(); const cur = getP(b.dataset.k), v = typeof cur === "number" ? +b.dataset.val : b.dataset.val; setP(b.dataset.k, v); changed(true); }
+  else if (b.dataset.tog) { snap(); setP(b.dataset.tog, getP(b.dataset.tog) ? 0 : 1); changed(true); } });
+$("tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (!b) return; ST.tab = b.dataset.tab; saveST(); renderTabs(); renderPanel(); $("panel").scrollTop = 0; });
+$("undo").onclick = () => { if (!UNDO.length) return toast("Rien à annuler"); P = UNDO.pop(); changed(true); };
+$("panic").onclick = () => { if (part) part.panic(); held.clear(); lightKeys(); };
+
+// ---- varier : chaque réglage bouge un peu (±10 % de sa course), les formes d'onde parfois
+$("vary").onclick = () => { snap(); renderPanelAll(c => { const t = toT(c, getP(c.path)) + (Math.random() * 2 - 1) * 0.1; setP(c.path, fromT(c, Math.max(0, Math.min(1, t)))); });
+  if (Math.random() < 0.25) { const O = P.o[Math.floor(Math.random() * 3)]; if (O.on) O.w = WAVES[Math.floor(Math.random() * WAVES.length)]; }
+  changed(true); toast("Variation (↶ pour revenir)"); preview(); };
+// toutes les commandes de tous les onglets (pour varier)
+function renderPanelAll(fn) { const t0 = ST.tab; const all = {};
+  for (const [k] of TABS) { ST.tab = k; renderPanel(); Object.assign(all, CTLS); }
+  ST.tab = t0; Object.values(all).filter(c => !/\.(oct|semi|uni)$|^bend$|^lvl$|^f\.cut$/.test(c.path)).forEach(fn); }
+
+// ---- bibliothèque
+const ORDER = () => [...Object.keys(SY.FACT), ...SY.mine().map(p => p.id)];
+function load(id, quiet) { const p = SY.get(id); if (!p) return; snap(); P = clone(p); delete P.id; curId = id; dirty = false; if (part) { part.panic(); part.set(P); } saveST(); renderHead(); renderPanel(); if (!quiet) preview(); }
+function step(d) { const L = ORDER(), i = L.indexOf(curId); load(L[(i + d + L.length) % L.length]); }
+$("prev").onclick = () => step(-1); $("next").onclick = () => step(1);
+$("pname").onclick = () => openLib();
+$("lib").onclick = () => openLib();
+let delArm = null;
+function openLib() {
+  const cats = [...new Set(Object.values(SY.FACT).map(p => p.cat))], mine = SY.mine();
+  const pill = (id, n) => `<button class="pill ${id === curId ? "on" : ""}" data-load="${id}">${n}</button>`;
+  $("libList").innerHTML = `<div class="lbl">MES SONS (${mine.length})</div>` +
+    (mine.length ? mine.map(p => `<div class="mine">${pill(p.id, p.name + " <small style='opacity:.6'>· " + p.cat + "</small>")}<button class="pill sm" data-del="${p.id}">${delArm === p.id ? "Effacer ?" : "🗑"}</button></div>`).join("")
+      : `<div class="lbl" style="letter-spacing:0">Aucun encore : règle un son puis « 💾 Garder ».</div>`) +
+    cats.map(c => `<div class="lbl">${c.toUpperCase()}</div><div class="chips" style="gap:6px">${Object.entries(SY.FACT).filter(([, p]) => p.cat === c).map(([k, p]) => pill(k, p.name)).join("")}</div>`).join("") +
+    `<div class="lbl">NOUVEAU</div><div class="chips"><button class="pill" data-init="1">Partir de zéro (une scie, filtre ouvert)</button></div>`;
+  $("libBox").style.display = "flex";
+}
+$("libList").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.load) { delArm = null; load(b.dataset.load); $("libBox").style.display = "none"; }
+  else if (b.dataset.del) { if (delArm !== b.dataset.del) { delArm = b.dataset.del; openLib(); return; }
+    SY.saveMine(SY.mine().filter(p => p.id !== b.dataset.del)); delArm = null; mirror(); if (curId === b.dataset.del) { dirty = true; renderHead(); } openLib(); toast("Son effacé"); }
+  else if (b.dataset.init) { snap(); P = SY.norm({ name: "Nouveau son", o: [{ on: 1, w: "saw" }], f: { t: "lp24", cut: 8000, env: 0 } }); curId = ""; dirty = true; changed(true); $("libBox").style.display = "none"; } });
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.closest(".ov").style.display = "none");
+document.querySelectorAll(".ov").forEach(o => o.addEventListener("click", e => { if (e.target === o) o.style.display = "none"; }));
+
+// ---- garder
+const CATS = ["Nappes", "Cordes", "Cuivres", "Leads", "Basses", "Plucks", "Claviers", "Cloches", "Ambiances", "Mes sons"];
+let sCat = null;
+$("save").onclick = () => { const isMine = SY.mine().some(p => p.id === curId);
+  $("sName").value = P.name + (!isMine && !dirty ? "" : !isMine ? " (à moi)" : ""); sCat = CATS.includes(P.cat) ? P.cat : "Mes sons";
+  $("sCat").innerHTML = CATS.map(c => `<button data-cat="${c}" class="${c === sCat ? "on" : ""}">${c}</button>`).join("");
+  $("sRep").style.display = isMine ? "" : "none"; $("sRepN").textContent = isMine ? (SY.get(curId) || {}).name : "";
+  $("saveBox").style.display = "flex"; };
+$("sCat").addEventListener("click", e => { const b = e.target.closest("[data-cat]"); if (!b) return; sCat = b.dataset.cat; $("sCat").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); });
+function store(replace) { const name = $("sName").value.trim() || "Mon son"; const list = SY.mine();
+  const rec = { ...clone(P), name, cat: sCat, id: replace ? curId : "u" + Date.now().toString(36) };
+  if (replace) { const i = list.findIndex(p => p.id === curId); if (i >= 0) list[i] = rec; else list.push(rec); } else list.push(rec);
+  SY.saveMine(list); P.name = name; P.cat = sCat; curId = rec.id; dirty = false; saveST(); renderHead(); mirror();
+  $("saveBox").style.display = "none"; toast(replace ? "Son remplacé" : "Son gardé : il est dans Création"); }
+$("sNew").onclick = () => store(false); $("sRep").onclick = () => store(true);
+let toastT = null;
+function toast(t) { const el = $("toast"); el.textContent = t; el.style.display = "block"; clearTimeout(toastT); toastT = setTimeout(() => el.style.display = "none", 1800); }
+
+// ---- clavier (glisser d'une touche à l'autre ; la force vient de la hauteur du doigt sur la touche : bas = fort)
+const held = new Map();      // note → poignée de note
+const fingers = new Map();   // pointeur → note de base
+const NAMES = ["Do", "Do♯", "Ré", "Ré♯", "Mi", "Fa", "Fa♯", "Sol", "Sol♯", "La", "La♯", "Si"];
+function buildKb() {
+  const kb = $("kb"), W = kb.clientWidth, nW = W < 520 ? 10 : W < 900 ? 15 : 22, ww = W / nW, base = 48 + 12 * ST.oct;
+  const WH = [0, 2, 4, 5, 7, 9, 11]; let h = "";
+  for (let i = 0; i < nW; i++) { const n = base + 12 * Math.floor(i / 7) + WH[i % 7];
+    h += `<div class="k w" data-n="${n}" style="left:${i * ww}px;width:${ww - 1}px">${n % 12 === 0 ? `<i>Do${Math.floor(n / 12) - 1}</i>` : ""}</div>`;
+    if ([0, 1, 3, 4, 5].includes(i % 7) && i < nW - 1) h += `<div class="k b" data-n="${n + 1}" style="left:${(i + 1) * ww - ww * 0.32}px;width:${ww * 0.64}px"></div>`; }
+  kb.innerHTML = h; lightKeys();
+}
+const notesOf = n => ST.chord ? [n, n + 4, n + 7] : [n];
+function keyAt(x, y) { const el = document.elementFromPoint(x, y); return el && el.closest("#kb .k"); }
+function kOn(n, vel) { audio(); for (const m of notesOf(n)) { if (held.has(m)) { held.get(m).stop(); held.delete(m); } held.set(m, part.on(m, vel)); } lightKeys(); }
+function kOff(n) { for (const m of notesOf(n)) { const h = held.get(m); if (h) { h.stop(); held.delete(m); } } lightKeys(); }
+function lightKeys() { $("kb").querySelectorAll(".k").forEach(k => k.classList.toggle("on", held.has(+k.dataset.n))); }
+const velOf = (k, y) => { const r = k.getBoundingClientRect(); return Math.max(0.2, Math.min(1, 0.3 + 0.75 * (y - r.top) / r.height)); };
+$("kb").addEventListener("pointerdown", e => { e.preventDefault(); const k = keyAt(e.clientX, e.clientY); if (!k) return; const n = +k.dataset.n;
+  $("kb").setPointerCapture(e.pointerId);
+  if (ST.hold && held.has(n)) { kOff(n); fingers.set(e.pointerId, null); return; }
+  fingers.set(e.pointerId, n); kOn(n, velOf(k, e.clientY)); });
+$("kb").addEventListener("pointermove", e => { if (!fingers.has(e.pointerId)) return; const cur = fingers.get(e.pointerId); if (cur == null) return;
+  const k = keyAt(e.clientX, e.clientY); if (!k) return; const n = +k.dataset.n; if (n === cur) return;
+  if (!ST.hold) kOff(cur); fingers.set(e.pointerId, n); kOn(n, velOf(k, e.clientY)); });
+const lift = e => { if (!fingers.has(e.pointerId)) return; const n = fingers.get(e.pointerId); fingers.delete(e.pointerId); if (n != null && !ST.hold) kOff(n); };
+$("kb").addEventListener("pointerup", lift); $("kb").addEventListener("pointercancel", lift);
+$("octD").onclick = () => { ST.oct = Math.max(-3, ST.oct - 1); saveST(); renderHead(); buildKb(); };
+$("octU").onclick = () => { ST.oct = Math.min(3, ST.oct + 1); saveST(); renderHead(); buildKb(); };
+$("hold").onclick = () => { ST.hold = !ST.hold; if (!ST.hold) { held.forEach(h => h.stop()); held.clear(); lightKeys(); } saveST(); renderHead(); };
+$("chord").onclick = () => { ST.chord = !ST.chord; saveST(); renderHead(); };
+const bend = $("bend"); bend.oninput = () => { if (part) part.bend(bend.value / 100); };
+bend.onpointerup = bend.onpointercancel = () => { bend.value = 0; if (part) part.bend(0); };
+// un aperçu quand on change de son : un accord (ou une note pour un son mono), une seconde
+function preview() { audio(); const b = 60 + 12 * Math.min(0, ST.oct), ns = P.mode === "poly" ? [b, b + 4, b + 7] : [b];
+  const hs = ns.map(n => part.on(n, 0.75)); setTimeout(() => hs.forEach(h => h.stop()), 1000); }
+
+// ---- oscilloscope
+function drawScope() { const cv = $("scope"), g = cv.getContext("2d"), buf = new Float32Array(an.fftSize);
+  const fr = () => { const w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = cv.clientHeight * devicePixelRatio;
+    an.getFloatTimeDomainData(buf); let s = 0; while (s < 600 && !(buf[s] <= 0 && buf[s + 1] > 0)) s++;
+    g.strokeStyle = "#5aa9ff"; g.lineWidth = 1.6 * devicePixelRatio; g.beginPath();
+    for (let i = 0; i < 1024; i++) { const x = i / 1023 * w, y = h / 2 - buf[s + i] * h * 0.45; i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
+    requestAnimationFrame(fr); }; fr(); }
+
+addEventListener("resize", () => { buildKb(); drawEnvs(); });
+renderTabs(); renderHead(); renderPanel(); buildKb(); mirror();
+
+</script>
+</body></html>
