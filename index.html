@@ -2579,11 +2579,28 @@ function pack(P) {
     })
   };
 }
+const DEF_FX = { eqOn: false, lo: 0, mid: 0, midF: 1000, hi: 0, hp: 0, compOn: false, comp: 40, drive: 0, dly: 0 };
+const DEF_DLY = { div: 0.75, fb: 0.35, tone: 3200, level: 0.65 };
+const DLY_DIVS = [[1, "1/4"], [0.75, "1/8·"], [0.5, "1/8"], [0.25, "1/16"], [2 / 3, "1/4T"], [1 / 3, "1/8T"]];
+const FX_PRESETS = [
+  ["Neutre", { eqOn: false, lo: 0, mid: 0, midF: 1000, hi: 0, hp: 0, compOn: false, comp: 40, drive: 0 }],
+  ["Piano clair", { eqOn: true, lo: -2, mid: 1, midF: 1800, hi: 4, hp: 80, compOn: true, comp: 30, drive: 0 }],
+  ["Basse punch", { eqOn: true, lo: 4, mid: 3, midF: 700, hi: -2, hp: 0, compOn: true, comp: 60, drive: 25 }],
+  ["Batterie punch", { eqOn: true, lo: 3, mid: -2, midF: 500, hi: 4, hp: 0, compOn: true, comp: 65, drive: 20 }],
+  ["Lead / Voix", { eqOn: true, lo: -3, mid: 3, midF: 2400, hi: 3, hp: 120, compOn: true, comp: 45, drive: 10 }],
+  ["Nappe chaude", { eqOn: true, lo: 2, mid: -2, midF: 900, hi: -3, hp: 120, compOn: false, comp: 30, drive: 15 }],
+  ["Lo-Fi", { eqOn: true, lo: -4, mid: 4, midF: 1100, hi: -9, hp: 200, compOn: true, comp: 55, drive: 55 }]
+];
+const fxOf = t => (t.fx = Object.assign({ ...DEF_FX }, t.fx || {}));
+const fxActive = t => { const f = fxOf(t); return !!(f.eqOn || f.hp > 0 || f.compOn || f.drive > 0); };
+const dlyCfg = () => (P.dly = Object.assign({ ...DEF_DLY }, P.dly || {}));
 function unpack(P) {
   const bt = (P.num || 4) * TPQ;
+  P.dly = Object.assign({ ...DEF_DLY }, P.dly || {});
   P.markers = (P.markers || []).map(m => ({ id: m.id || uid("m"), name: m.n ?? m.name ?? "Section", s: Math.max(0, m.s | 0), d: Math.max(bt, m.d | 0), color: m.c || m.color || "#4a90d9" })).sort((a, b) => a.s - b.s);
   const upN = arr => (arr || []).map(n => Array.isArray(n) ? { p: n[0], s: n[1], d: n[2], v: n[3], i: nid++ } : { ...n, i: nid++ });
   P.tracks.forEach(t => {
+    t.fx = Object.assign({ ...DEF_FX }, t.fx || {});
     if (Array.isArray(t.regions)) {
       t.regions = t.regions.map(r => ({
         id: r.id || uid("r"), name: r.n ?? r.name ?? t.name, s: Math.max(0, r.s | 0), d: Math.max(TPQ, r.d | 0),
@@ -2899,22 +2916,89 @@ function delSection(mi, ripple) {
   changed(); render();
 }
 
-// ------------------------------------------------------------------ son
+// ------------------------------------------------------------------ son : tranche de console pro (HPF, EQ 3 bandes, Drive, Comp, Pan, VU, Réverb + Delay tempo)
 const tBus = new Map();
+const drvCurves = new Map();
+function drvCurve(amt) {
+  const k = Math.round(amt / 5) * 5;
+  if (drvCurves.has(k)) return drvCurves.get(k);
+  const N = 1024, c = new Float32Array(N);
+  if (k <= 0) { for (let i = 0; i < N; i++) c[i] = i / (N - 1) * 2 - 1; }
+  else { const d = 1 + (k / 100) * 9, norm = Math.tanh(d); for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1; c[i] = Math.tanh(d * x) / norm; } }
+  drvCurves.set(k, c); return c;
+}
+let dlyBus = null, masterAn = null;
+function ensureDelay() {
+  if (!ac) return null;
+  if (!dlyBus) {
+    const inp = ac.createGain(), lp = ac.createBiquadFilter(), dL = ac.createDelay(2.0), dR = ac.createDelay(2.0);
+    const fbG = ac.createGain(), mg = ac.createChannelMerger(2), out = ac.createGain();
+    lp.type = "lowpass"; lp.Q.value = 0.7;
+    inp.connect(lp); lp.connect(dL); dL.connect(dR); dR.connect(fbG); fbG.connect(lp);
+    dL.connect(mg, 0, 0); dR.connect(mg, 0, 1); mg.connect(out); out.connect(master);
+    dlyBus = { in: inp, lp, dL, dR, fbG, out };
+  }
+  if (!masterAn && window.__clip) {
+    masterAn = ac.createAnalyser(); masterAn.fftSize = 256; masterAn.smoothingTimeConstant = 0.6;
+    try { window.__clip.connect(masterAn); } catch (e) {}
+  }
+  updateDelay();
+  return dlyBus;
+}
+function updateDelay() {
+  if (!ac || !dlyBus || !P) return;
+  const c = dlyCfg(), now = ac.currentTime;
+  const sec = Math.min(1.8, Math.max(0.04, (60 / (P.bpm || 90)) * (c.div || 0.75)));
+  dlyBus.dL.delayTime.setTargetAtTime(sec, now, 0.02);
+  dlyBus.dR.delayTime.setTargetAtTime(sec, now, 0.02);
+  dlyBus.fbG.gain.setTargetAtTime(Math.max(0, Math.min(0.82, c.fb ?? 0.35)), now, 0.02);
+  dlyBus.lp.frequency.setTargetAtTime(Math.max(400, Math.min(12000, c.tone || 3200)), now, 0.02);
+  dlyBus.out.gain.setTargetAtTime(Math.max(0, Math.min(1.2, (c.level ?? 0.65) * 0.75)), now, 0.02);
+}
 function busOf(t) {
   let b = tBus.get(t.id);
-  if (!b) { const g = ac.createGain(), pn = ac.createStereoPanner ? ac.createStereoPanner() : null, sendG = ac.createGain();
-    if (pn) { g.connect(pn); pn.connect(master); } else g.connect(master);
+  const db = ensureDelay();
+  if (!b) {
+    const inp = ac.createGain(), hpf = ac.createBiquadFilter(), eqLo = ac.createBiquadFilter(), eqMid = ac.createBiquadFilter(), eqHi = ac.createBiquadFilter();
+    const drv = ac.createWaveShaper(), cmp = ac.createDynamicsCompressor(), mkup = ac.createGain();
+    const g = ac.createGain(), pn = ac.createStereoPanner ? ac.createStereoPanner() : null;
+    const an = ac.createAnalyser(), sendG = ac.createGain(), dlyG = ac.createGain();
+    hpf.type = "highpass"; hpf.Q.value = 0.7;
+    eqLo.type = "lowshelf"; eqLo.frequency.value = 120;
+    eqMid.type = "peaking"; eqMid.Q.value = 1.1;
+    eqHi.type = "highshelf"; eqHi.frequency.value = 6000;
+    drv.oversample = "2x";
+    cmp.knee.value = 8; cmp.attack.value = 0.01; cmp.release.value = 0.18;
+    an.fftSize = 256; an.smoothingTimeConstant = 0.55;
+    inp.connect(hpf); hpf.connect(eqLo); eqLo.connect(eqMid); eqMid.connect(eqHi);
+    eqHi.connect(drv); drv.connect(cmp); cmp.connect(mkup); mkup.connect(g);
+    if (pn) { g.connect(pn); pn.connect(an); } else g.connect(an);
+    an.connect(master);
     g.connect(sendG); sendG.connect(revSend);
-    b = { g, pn, sendG }; tBus.set(t.id, b); }
+    g.connect(dlyG); if (db) dlyG.connect(db.in);
+    b = { in: inp, hpf, eqLo, eqMid, eqHi, drv, cmp, mkup, g, pn, an, sendG, dlyG, lastDrv: -1 };
+    tBus.set(t.id, b);
+  }
+  const f = fxOf(t);
+  b.hpf.frequency.value = f.hp > 0 ? f.hp : 10;
+  b.eqLo.gain.value = f.eqOn ? f.lo : 0;
+  b.eqMid.frequency.value = Math.max(200, Math.min(6000, f.midF || 1000));
+  b.eqMid.gain.value = f.eqOn ? f.mid : 0;
+  b.eqHi.gain.value = f.eqOn ? f.hi : 0;
+  const dk = Math.round((f.drive || 0) / 5) * 5;
+  if (b.lastDrv !== dk) { b.drv.curve = drvCurve(dk); b.lastDrv = dk; }
+  b.cmp.threshold.value = f.compOn ? -6 - 0.24 * (f.comp || 40) : 0;
+  b.cmp.ratio.value = f.compOn ? 1 + 0.08 * (f.comp || 40) : 1;
+  b.mkup.gain.value = f.compOn ? 1 + 0.008 * (f.comp || 40) : 1;
   b.sendG.gain.value = (t.rev ?? 50) / 100;
+  b.dlyG.gain.value = (f.dly || 0) / 100;
   const aud = audible(t);
   b.g.gain.value = aud ? Math.pow(t.vol / 100, 2) * (t.kind === "drum" ? 0.55 : 1.1) : 0;
   if (b.pn) b.pn.pan.value = t.pan || 0;
-  return b.g;
+  return b.in;
 }
 const audible = t => !t.mute && (!P.tracks.some(x => x.solo) || t.solo);
-function mixAll() { if (ac && P) P.tracks.forEach(busOf); }
+function mixAll() { if (ac && P) { updateDelay(); P.tracks.forEach(busOf); } }
 const live = new Set();
 function noteOn(t, p, v, T, dur, gain) {
   if (t.kind === "drum") {
@@ -3011,7 +3095,7 @@ function setBpm(v) {
   v = Math.max(30, Math.min(260, Math.round(v)));
   if (tp.on) { const a = tp.anchors[tp.anchors.length - 1], t = timeOf(tp.next, a); P.bpm = v; tp.anchors = [{ t0: t, p0: tp.next }]; }
   else P.bpm = v;
-  storeSoon(); renderTop();
+  updateDelay(); storeSoon(); renderTop();
 }
 
 // ------------------------------------------------------------------ export MIDI (format 1, une piste par piste)
@@ -3064,8 +3148,8 @@ const css = `
 #studio .strow { display:flex; gap:5px; align-items:center; padding:5px 6px; overflow-x:auto; scrollbar-width:none; touch-action:pan-x; flex-shrink:0; }
 #studio .strow::-webkit-scrollbar { display:none; }
 #studio .pill { flex-shrink:0; padding:7px 10px; }
-#studio .pill.gold { background:rgba(245,179,66,.85); color:#1a1205; }
-#studio .pill.red { background:rgba(229,83,75,.8); }
+#studio .pill.gold, #stBox .pill.gold { background:rgba(245,179,66,.85); color:#1a1205; }
+#studio .pill.red, #stBox .pill.red { background:rgba(229,83,75,.8); }
 #studio .lbl2 { font:600 12px system-ui; color:var(--muted); white-space:nowrap; flex-shrink:0; }
 #stTop { background:rgba(255,255,255,.04); border-bottom:1px solid rgba(255,255,255,.08); }
 #stPos { font:700 14px ui-monospace,monospace; color:var(--gold); min-width:64px; text-align:center; flex-shrink:0; }
@@ -3080,14 +3164,20 @@ const css = `
 .sth .bt button { border:0; border-radius:7px; font:700 11px system-ui; padding:3px 7px; color:var(--fg); background:rgba(255,255,255,.1); }
 .sth .bt button.m.on { background:#e5534b; } .sth .bt button.s.on { background:#f5b342; color:#111; }
 .sth .bar { position:absolute; left:0; top:0; bottom:0; width:4px; }
-#stMix { flex-shrink:0; display:none; flex-direction:column; gap:1px; max-height:48%; overflow-y:auto; touch-action:pan-y; border-top:1px solid rgba(74,144,217,.6); background:#111a28; padding:4px 6px 6px; }
+#stMix { flex-shrink:0; display:none; flex-direction:column; gap:2px; max-height:52%; overflow-y:auto; touch-action:pan-y; border-top:1px solid rgba(74,144,217,.6); background:#111a28; padding:5px 6px 6px; }
 #stMix.on { display:flex; }
-.mxr { display:grid; grid-template-columns:minmax(60px,1.1fr) 3fr 2fr 2fr auto; gap:6px; align-items:center; padding:3px 0 3px 7px; border-left:4px solid transparent; }
+.mxr { display:grid; grid-template-columns:minmax(72px,1.2fr) 2.6fr 1.8fr 1.6fr 1.6fr auto; gap:5px; align-items:center; padding:3px 0 3px 7px; border-left:4px solid transparent; }
+.mxr .nc { display:flex; flex-direction:column; gap:3px; min-width:0; }
 .mxr .n { font:700 12px system-ui; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mxr .vu { height:6px; border-radius:3px; background:rgba(255,255,255,.08); overflow:hidden; position:relative; }
+.mxr .vu i { display:block; height:100%; width:0%; border-radius:3px; background:linear-gradient(90deg,#3fb27f 0%,#3fb27f 65%,#f5b342 84%,#e5534b 100%); transition:width 50ms linear; }
+.mxr .vu b { position:absolute; top:0; bottom:0; width:2px; left:0%; background:#fff; opacity:.75; display:none; }
 .mxr label { display:flex; flex-direction:column; font:600 9px system-ui; color:var(--muted); gap:0; }
-.mxr input { width:100%; margin:0; height:26px; }
-.mxr .b { display:flex; gap:4px; } .mxr .b button { border:0; border-radius:7px; font:700 12px system-ui; padding:6px 9px; color:var(--fg); background:rgba(255,255,255,.1); }
-.mxr .b button.m.on { background:#e5534b; } .mxr .b button.s.on { background:#f5b342; color:#111; }
+.mxr input { width:100%; margin:0; height:24px; }
+.mxr .b { display:flex; gap:3px; } .mxr .b button { border:0; border-radius:7px; font:700 11px system-ui; padding:6px 7px; color:var(--fg); background:rgba(255,255,255,.1); }
+.mxr .b button.m.on { background:#e5534b; } .mxr .b button.s.on { background:#f5b342; color:#111; } .mxr .b button.fx.on { background:#4a90d9; color:#fff; }
+#stEqCv { width:100%; height:92px; border-radius:10px; background:#0d1420; border:1px solid rgba(255,255,255,.08); display:block; }
+.fxsl { display:flex; align-items:center; gap:8px; font:600 12px system-ui; } .fxsl span { min-width:74px; color:var(--muted); } .fxsl input { flex:1; min-width:0; } .fxsl b { min-width:46px; text-align:right; font-variant-numeric:tabular-nums; }
 #stStep { flex-shrink:0; display:none; flex-direction:column; gap:2px; border-top:1px solid rgba(245,179,66,.5); background:rgba(245,179,66,.05); padding-bottom:4px; }
 #stStep.on { display:flex; }
 #stKb { position:relative; height:112px; margin:2px 6px 0; touch-action:none; }
@@ -4043,6 +4133,7 @@ function trackMenu(i) {
     <div class="chips">${COLORS.map(c => `<button class="pill" data-b="col" data-ti="${i}" data-c="${c}" style="background:${c};min-width:34px">${c === t.color ? "✓" : "&nbsp;"}</button>`).join("")}</div>
     <div class="chips"><span class="lbl2">Panoramique</span>${[-0.6, -0.3, 0, 0.3, 0.6].map(v => `<button class="pill ${Math.abs((t.pan || 0) - v) < 0.01 ? "on" : ""}" data-b="pan" data-ti="${i}" data-v="${v}">${v < 0 ? "G " + (-v * 100) : v > 0 ? "D " + v * 100 : "centre"}</button>`).join("")}</div>
     <div class="chips">
+      <button class="pill ${fxActive(t) ? "on" : ""}" data-b="fxOpen" data-ti="${i}">🎛 Tranche FX (EQ / Comp / Delay)</button>
       <button class="pill" data-b="trkUp" data-ti="${i}">↑ Monter</button><button class="pill" data-b="trkDn" data-ti="${i}">↓ Descendre</button>
       <button class="pill" data-b="trkDup" data-ti="${i}">⧉ Dupliquer</button><button class="pill" data-b="trkClr" data-ti="${i}">⌫ Vider</button>
       <button class="pill red" data-b="trkDel" data-ti="${i}">✕ Supprimer</button></div>
@@ -4162,26 +4253,146 @@ function markerBox(mi) {
       <button class="pill red" data-b="secDel" data-v="${mi}" data-d="1">✕ Suppr. section + notes</button></div>
     <div class="chips"><button class="pill" data-b="sections">← Toutes les sections</button><button class="pill" data-b="close">Fermer</button></div>`);
 }
-// ------------------------------------------------------------------ mixeur (volume, panoramique, réverb, muet, solo)
+// ------------------------------------------------------------------ console de mixage (VU-mètres, vol, pan, réverb, delay, FX, M/S)
+let vuRaf = null, vuLast = 0;
+const vuPeak = new Map(), vuBuf = new Float32Array(256);
+function meterOf(an, key) {
+  let lv = 0;
+  if (an) {
+    an.getFloatTimeDomainData(vuBuf);
+    let pk = 0; for (let i = 0; i < vuBuf.length; i++) { const a = Math.abs(vuBuf[i]); if (a > pk) pk = a; }
+    lv = pk > 0.0005 ? Math.min(1, Math.max(0, (20 * Math.log10(pk) + 48) / 48)) : 0;
+  }
+  const prev = vuPeak.get(key) || { v: 0, p: 0, h: 0 };
+  const v = lv > prev.v ? lv : prev.v * 0.82;
+  let p = prev.p, h = prev.h;
+  if (v >= p) { p = v; h = 14; } else if (h > 0) h--; else p = Math.max(v, p - 0.03);
+  vuPeak.set(key, { v, p, h });
+  return { v, p };
+}
+function vuTick(ts) {
+  if (!st.mix || !root.classList.contains("on")) { vuRaf = null; return; }
+  if (ts - vuLast >= 48) {
+    vuLast = ts;
+    const M = el("stMix");
+    if (M && P) {
+      P.tracks.forEach((t, i) => {
+        const b = tBus.get(t.id), m = meterOf(b && b.an, t.id);
+        const bar = M.querySelector(`[data-vu="${i}"]`);
+        if (bar) { bar.firstChild.style.width = Math.round(m.v * 100) + "%"; const dot = bar.lastChild; dot.style.display = m.p > 0.03 ? "block" : "none"; dot.style.left = Math.min(98, Math.round(m.p * 100)) + "%"; }
+      });
+      const mm = meterOf(masterAn, "_m"), mbar = M.querySelector('[data-vu="m"]');
+      if (mbar) { mbar.firstChild.style.width = Math.round(mm.v * 100) + "%"; const dot = mbar.lastChild; dot.style.display = mm.p > 0.03 ? "block" : "none"; dot.style.left = Math.min(98, Math.round(mm.p * 100)) + "%"; }
+    }
+  }
+  vuRaf = requestAnimationFrame(vuTick);
+}
 function renderMixer() {
-  const M = el("stMix"); M.classList.toggle("on", !!st.mix); if (!st.mix) return;
-  const row = (t, i) => `<div class="mxr" style="border-left-color:${t.color}"><span class="n">${esc(t.name)}</span>
+  const M = el("stMix"); M.classList.toggle("on", !!st.mix);
+  if (!st.mix) { if (vuRaf) { cancelAnimationFrame(vuRaf); vuRaf = null; } return; }
+  const dly = dlyCfg(), divL = (DLY_DIVS.find(x => Math.abs(x[0] - dly.div) < 0.02) || [, "1/8·"])[1];
+  const row = (t, i) => { const f = fxOf(t); return `<div class="mxr" style="border-left-color:${t.color}">
+    <div class="nc"><span class="n">${esc(t.name)}</span><div class="vu" data-vu="${i}"><i></i><b></b></div></div>
     <label>Volume ${t.vol}<input type="range" min="0" max="127" value="${t.vol}" data-mx="vol" data-ti="${i}"></label>
     <label>Pan. ${t.pan ? (t.pan < 0 ? "G " : "D ") + Math.round(Math.abs(t.pan) * 100) : "centre"}<input type="range" min="-100" max="100" value="${Math.round((t.pan || 0) * 100)}" data-mx="pan" data-ti="${i}"></label>
     <label>Réverb ${t.rev ?? 50}<input type="range" min="0" max="100" value="${t.rev ?? 50}" data-mx="rev" data-ti="${i}"></label>
-    <span class="b"><button class="m ${t.mute ? "on" : ""}" data-a="mute" data-ti="${i}">M</button><button class="s ${t.solo ? "on" : ""}" data-a="solo" data-ti="${i}">S</button></span></div>`;
+    <label>Delay ${f.dly || 0}<input type="range" min="0" max="100" value="${f.dly || 0}" data-mx="dly" data-ti="${i}"></label>
+    <span class="b"><button class="fx ${fxActive(t) ? "on" : ""}" data-a="fx" data-ti="${i}">FX</button><button class="m ${t.mute ? "on" : ""}" data-a="mute" data-ti="${i}">M</button><button class="s ${t.solo ? "on" : ""}" data-a="solo" data-ti="${i}">S</button></span></div>`; };
   M.innerHTML = P.tracks.map(row).join("") +
-    `<div class="mxr" style="border-left-color:#fff"><span class="n">Général</span>
+    `<div class="mxr" style="border-left-color:#fff">
+      <div class="nc"><span class="n">Général</span><div class="vu" data-vu="m"><i></i><b></b></div></div>
       <label>Volume ${S.vMax}<input type="range" min="0" max="100" value="${S.vMax}" data-mx="gvol"></label>
-      <label>Salle (réverb) ${S.vRev}<input type="range" min="0" max="100" value="${S.vRev}" data-mx="grev"></label><span></span><span></span></div>`;
+      <label>Réverb ${S.vRev}<input type="range" min="0" max="100" value="${S.vRev}" data-mx="grev"></label>
+      <label>Delay ${Math.round((dly.level ?? 0.65) * 100)}<input type="range" min="0" max="100" value="${Math.round((dly.level ?? 0.65) * 100)}" data-mx="gdly"></label>
+      <span></span>
+      <span class="b"><button class="fx on" data-a="dlyCfg">⚙ ${divL}</button></span></div>`;
+  if (!vuRaf) vuRaf = requestAnimationFrame(vuTick);
 }
 el("stMix").addEventListener("input", e => {
   const r = e.target.closest("[data-mx]"); if (!r) return; const k = r.dataset.mx, v = +r.value, t = P.tracks[+r.dataset.ti];
   if (k === "vol") t.vol = v; else if (k === "pan") t.pan = Math.abs(v) < 4 ? 0 : v / 100; else if (k === "rev") t.rev = v;
+  else if (k === "dly") fxOf(t).dly = v;
   else if (k === "gvol") { S.vMax = v; mix(); save(); } else if (k === "grev") { S.vRev = v; mix(); save(); }
+  else if (k === "gdly") { dlyCfg().level = v / 100; }
   mixAll(); storeSoon();
-  const lab = r.parentElement; lab.firstChild.textContent = { vol: "Volume " + v, pan: "Pan. " + (Math.abs(v) < 4 ? "centre" : (v < 0 ? "G " : "D ") + Math.abs(v)), rev: "Réverb " + v, gvol: "Volume " + v, grev: "Salle (réverb) " + v }[k];
+  const lab = r.parentElement; lab.firstChild.textContent = { vol: "Volume " + v, pan: "Pan. " + (Math.abs(v) < 4 ? "centre" : (v < 0 ? "G " : "D ") + Math.abs(v)), rev: "Réverb " + v, dly: "Delay " + v, gvol: "Volume " + v, grev: "Réverb " + v, gdly: "Delay " + v }[k];
   if (k === "vol") renderHeads();
+});
+// ------------------------------------------------------------------ tranche de console FX par piste + Delay tempo
+function drawEqCurve(ti) {
+  const c = el("stEqCv"); if (!c) return;
+  const t = P.tracks[ti]; if (!t) return;
+  const b = ac ? (busOf(t), tBus.get(t.id)) : null;
+  const W = c.clientWidth || 320, H = c.clientHeight || 92, d = window.devicePixelRatio || 1;
+  c.width = Math.round(W * d); c.height = Math.round(H * d);
+  const g = c.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0);
+  g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
+  // Grille fréquences & 0 dB
+  const fMin = 25, fMax = 16000, lx = f => Math.log(f / fMin) / Math.log(fMax / fMin) * W;
+  g.strokeStyle = "rgba(255,255,255,.07)"; g.lineWidth = 1;
+  [50, 100, 250, 500, 1000, 2000, 4000, 8000].forEach(f => { const x = lx(f); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); });
+  g.strokeStyle = "rgba(255,255,255,.16)"; g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+  g.fillStyle = "#6e7d92"; g.font = "600 9px system-ui";
+  [[100, "100"], [500, "500"], [1000, "1k"], [4000, "4k"], [8000, "8k"]].forEach(([f, l]) => g.fillText(l, lx(f) + 2, H - 4));
+  if (!b) return;
+  const N = 128, freqs = new Float32Array(N), mag = new Float32Array(N), ph = new Float32Array(N), tot = new Float32Array(N).fill(1);
+  for (let i = 0; i < N; i++) freqs[i] = fMin * Math.pow(fMax / fMin, i / (N - 1));
+  [b.hpf, b.eqLo, b.eqMid, b.eqHi].forEach(flt => { flt.getFrequencyResponse(freqs, mag, ph); for (let i = 0; i < N; i++) tot[i] *= mag[i]; });
+  g.beginPath();
+  for (let i = 0; i < N; i++) {
+    const db = Math.max(-18, Math.min(18, 20 * Math.log10(Math.max(1e-4, tot[i]))));
+    const x = i / (N - 1) * W, y = H / 2 - (db / 16) * (H / 2 - 6);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.strokeStyle = t.color; g.lineWidth = 2.2; g.stroke();
+  g.lineTo(W, H / 2); g.lineTo(0, H / 2); g.closePath();
+  g.fillStyle = t.color + "28"; g.fill();
+}
+function fxBox(ti) {
+  const t = P.tracks[ti]; if (!t) return;
+  const f = fxOf(t);
+  box(`<h3 style="color:${t.color}">🎛 Tranche FX · ${esc(t.name)}</h3>
+    <div class="chips"><span class="lbl2">Préréglages</span>${FX_PRESETS.map(([nm], k) => `<button class="pill" data-b="fxPre" data-ti="${ti}" data-v="${k}">${nm}</button>`).join("")}</div>
+    <canvas id="stEqCv"></canvas>
+    <div class="chips">
+      <button class="pill ${f.eqOn ? "on" : ""}" data-b="fxEqOn" data-ti="${ti}">EQ 3 bandes ${f.eqOn ? "✓" : ""}</button>
+      <span class="lbl2">Coupe-bas</span>${[0, 80, 120, 200].map(hz => `<button class="pill ${f.hp === hz ? "gold" : ""}" data-b="fxHp" data-ti="${ti}" data-v="${hz}">${hz ? hz + " Hz" : "Off"}</button>`).join("")}</div>
+    <div class="fxsl"><span>Grave (120)</span><input type="range" min="-12" max="12" step="1" value="${f.lo}" data-fx="lo" data-ti="${ti}"><b>${f.lo > 0 ? "+" : ""}${f.lo} dB</b></div>
+    <div class="fxsl"><span>Médium</span><input type="range" min="-12" max="12" step="1" value="${f.mid}" data-fx="mid" data-ti="${ti}"><b>${f.mid > 0 ? "+" : ""}${f.mid} dB</b></div>
+    <div class="fxsl"><span>Fréq. méd.</span><input type="range" min="250" max="4500" step="50" value="${f.midF}" data-fx="midF" data-ti="${ti}"><b>${f.midF >= 1000 ? (f.midF / 1000).toFixed(1) + " kHz" : f.midF + " Hz"}</b></div>
+    <div class="fxsl"><span>Aigu (6 kHz)</span><input type="range" min="-12" max="12" step="1" value="${f.hi}" data-fx="hi" data-ti="${ti}"><b>${f.hi > 0 ? "+" : ""}${f.hi} dB</b></div>
+    <div class="chips"><button class="pill ${f.compOn ? "gold" : ""}" data-b="fxCompOn" data-ti="${ti}">Compresseur ${f.compOn ? "✓" : ""}</button></div>
+    <div class="fxsl"><span>Compression</span><input type="range" min="0" max="100" value="${f.comp}" data-fx="comp" data-ti="${ti}"><b>${f.comp} %</b></div>
+    <div class="fxsl"><span>Chaleur</span><input type="range" min="0" max="100" value="${f.drive}" data-fx="drive" data-ti="${ti}"><b>${f.drive} %</b></div>
+    <div class="fxsl"><span>Envoi Réverb</span><input type="range" min="0" max="100" value="${t.rev ?? 50}" data-fx="rev" data-ti="${ti}"><b>${t.rev ?? 50} %</b></div>
+    <div class="fxsl"><span>Envoi Delay</span><input type="range" min="0" max="100" value="${f.dly || 0}" data-fx="dly" data-ti="${ti}"><b>${f.dly || 0} %</b></div>
+    <div class="chips"><button class="pill" data-b="dlyOpen">⚙ Régler le Delay tempo</button><button class="pill on" data-b="close">OK</button></div>`);
+  requestAnimationFrame(() => drawEqCurve(ti));
+}
+function dlyBox() {
+  const c = dlyCfg(), ms = Math.round((60000 / (P.bpm || 90)) * (c.div || 0.75));
+  box(`<h3>⚙ Delay stéréo synchronisé au tempo (♩ ${P.bpm} · ${ms} ms)</h3>
+    <div class="lbl2" style="white-space:normal">Ping-pong gauche/droite calé automatiquement sur le tempo du projet. Dose l'envoi Delay sur chaque piste dans le Mixeur ou sa tranche FX.</div>
+    <div class="chips"><span class="lbl2">Rythme</span>${DLY_DIVS.map(([v, l]) => `<button class="pill ${Math.abs(c.div - v) < 0.02 ? "gold" : ""}" data-b="dlyDiv" data-v="${v}">${l}</button>`).join("")}</div>
+    <div class="fxsl"><span>Répétitions</span><input type="range" min="0" max="80" value="${Math.round((c.fb ?? 0.35) * 100)}" data-fx="dlyFb"><b>${Math.round((c.fb ?? 0.35) * 100)} %</b></div>
+    <div class="fxsl"><span>Chaleur (filtre)</span><input type="range" min="600" max="9000" step="100" value="${c.tone || 3200}" data-fx="dlyTone"><b>${c.tone >= 1000 ? (c.tone / 1000).toFixed(1) + " kHz" : c.tone + " Hz"}</b></div>
+    <div class="fxsl"><span>Niveau retour</span><input type="range" min="0" max="100" value="${Math.round((c.level ?? 0.65) * 100)}" data-fx="dlyLvl"><b>${Math.round((c.level ?? 0.65) * 100)} %</b></div>
+    <button class="pill on" data-b="close">OK</button>`);
+}
+el("stBox").addEventListener("input", e => {
+  const r = e.target.closest("[data-fx]"); if (!r) return;
+  const k = r.dataset.fx, v = +r.value, ti = +r.dataset.ti, b = r.nextElementSibling;
+  if (k === "dlyFb") { dlyCfg().fb = v / 100; b.textContent = v + " %"; updateDelay(); storeSoon(); return; }
+  if (k === "dlyTone") { dlyCfg().tone = v; b.textContent = v >= 1000 ? (v / 1000).toFixed(1) + " kHz" : v + " Hz"; updateDelay(); storeSoon(); return; }
+  if (k === "dlyLvl") { dlyCfg().level = v / 100; b.textContent = v + " %"; updateDelay(); renderMixer(); storeSoon(); return; }
+  const t = P.tracks[ti]; if (!t) return; const f = fxOf(t);
+  if (k === "lo" || k === "mid" || k === "hi") { f[k] = v; f.eqOn = true; b.textContent = (v > 0 ? "+" : "") + v + " dB"; }
+  else if (k === "midF") { f.midF = v; f.eqOn = true; b.textContent = v >= 1000 ? (v / 1000).toFixed(1) + " kHz" : v + " Hz"; }
+  else if (k === "comp") { f.comp = v; f.compOn = true; b.textContent = v + " %"; }
+  else if (k === "drive") { f.drive = v; b.textContent = v + " %"; }
+  else if (k === "rev") { t.rev = v; b.textContent = v + " %"; }
+  else if (k === "dly") { f.dly = v; b.textContent = v + " %"; }
+  mixAll(); storeSoon(); drawEqCurve(ti); renderMixer();
 });
 // ------------------------------------------------------------------ durée de chaque accord de la suite posée
 // En mesures : ⅛ (une croche en 4/4), ¼ (un temps), ⅜, ½, ¾, 1, 1¼, 1½, 2.
@@ -4316,6 +4527,13 @@ el("stBox").addEventListener("click", e => {
     if (taps2.length >= 3) { const d = (taps2[taps2.length - 1] - taps2[0]) / (taps2.length - 1); setBpm(60000 / d); el("stTapL").textContent = "♩ = " + P.bpm; } else el("stTapL").textContent = "encore…"; }
   else if (a === "kit") { P.tracks[ti].kit = b.dataset.v; if (b.dataset.v !== "synth") kitLoad(b.dataset.v); storeSoon(); kitBox(ti); render();
     setTimeout(() => { const t = P.tracks[ti]; audio(); const now = ac.currentTime; noteOn(t, 36, 100, now + 0.05, 0.1); noteOn(t, 42, 80, now + 0.3, 0.1); noteOn(t, 38, 100, now + 0.55, 0.1); }, 400); }
+  else if (a === "fxOpen") fxBox(ti);
+  else if (a === "fxPre") { const t = P.tracks[ti], pr = FX_PRESETS[+b.dataset.v]; if (t && pr) { Object.assign(fxOf(t), pr[1]); mixAll(); storeSoon(); fxBox(ti); renderMixer(); toast("Préréglage : " + pr[0]); } }
+  else if (a === "fxEqOn") { const t = P.tracks[ti]; if (t) { fxOf(t).eqOn = !fxOf(t).eqOn; mixAll(); storeSoon(); fxBox(ti); renderMixer(); } }
+  else if (a === "fxHp") { const t = P.tracks[ti]; if (t) { fxOf(t).hp = +b.dataset.v; mixAll(); storeSoon(); fxBox(ti); renderMixer(); } }
+  else if (a === "fxCompOn") { const t = P.tracks[ti]; if (t) { fxOf(t).compOn = !fxOf(t).compOn; mixAll(); storeSoon(); fxBox(ti); renderMixer(); } }
+  else if (a === "dlyOpen") dlyBox();
+  else if (a === "dlyDiv") { dlyCfg().div = +b.dataset.v; updateDelay(); storeSoon(); dlyBox(); renderMixer(); }
   else if (a === "pickT") { st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
 });
 
@@ -4364,6 +4582,8 @@ root.addEventListener("click", e => {
     case "snd": if (trk().kind === "drum") kitBox(st.trk); else { soundFor = "trk"; openSounds("trk"); } break;
     case "mute": P.tracks[ti].mute = !P.tracks[ti].mute; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
     case "solo": P.tracks[ti].solo = !P.tracks[ti].solo; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
+    case "fx": fxBox(ti); break;
+    case "dlyCfg": dlyBox(); break;
     case "vol-": case "vol+": { const t = P.tracks[ti]; t.vol = Math.max(0, Math.min(127, t.vol + (a === "vol+" ? 8 : -8))); mixAll(); storeSoon(); renderHeads(); break; }
     case "volv": volBox(ti); break;
     case "pickTrk": trkPickBox(); break;
@@ -4405,7 +4625,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll },
 };
 return api;
 })();
