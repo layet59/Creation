@@ -2569,8 +2569,11 @@ function pack(P) {
     markers: (P.markers || []).map(m => ({ id: m.id, n: m.name, s: m.s, d: m.d, c: m.color })),
     tracks: P.tracks.map(t => {
       const { notes, ...rest } = t; void notes;
+      const au = {};
+      if (t.auto) for (const k of ["vol", "pan", "rev", "dly"]) if (Array.isArray(t.auto[k]) && t.auto[k].length) au[k] = t.auto[k].map(([s, v]) => [Math.round(s), Math.round(v * 1000) / 1000]);
       return {
         ...rest,
+        auto: Object.keys(au).length ? au : undefined,
         regions: (t.regions || []).map(r => ({
           id: r.id, n: r.name, s: r.s, d: r.d, rep: r.rep || 1, m: r.mute ? 1 : 0, c: r.color || "",
           ns: r.notes.map(n => [n.p, n.s, n.d, n.v])
@@ -2601,6 +2604,8 @@ function unpack(P) {
   const upN = arr => (arr || []).map(n => Array.isArray(n) ? { p: n[0], s: n[1], d: n[2], v: n[3], i: nid++ } : { ...n, i: nid++ });
   P.tracks.forEach(t => {
     t.fx = Object.assign({ ...DEF_FX }, t.fx || {});
+    t.auto = t.auto && typeof t.auto === "object" ? t.auto : {};
+    for (const k of ["vol", "pan", "rev", "dly"]) if (Array.isArray(t.auto[k])) t.auto[k].sort((a, b) => a[0] - b[0]);
     if (Array.isArray(t.regions)) {
       t.regions = t.regions.map(r => ({
         id: r.id || uid("r"), name: r.n ?? r.name ?? t.name, s: Math.max(0, r.s | 0), d: Math.max(TPQ, r.d | 0),
@@ -2687,7 +2692,8 @@ function changed() { fitBars(); storeSoon(); draw(); renderTop(); }
 // ------------------------------------------------------------------ état de l'affichage
 const st = { view: "arr", trk: 0, regId: null, cur: 0, sel: new Set(), grid: 24, len: 96, dot: false, tri: false, vel: 80, pencil: true, step: false,
   x0: 0, ppt: 0.9, y0: null, rh: 16, ax0: 0, ay: 0, appt: 0.12, ghost: true, kbOct: 4, follow: true, metro: false, chordHold: false, velLane: true,
-  scaleLock: false, seq: false, seqBar: 0, seqAll: false, qStr: 100, qSw: 0 };
+  scaleLock: false, seq: false, seqBar: 0, seqAll: false, qStr: 100, qSw: 0,
+  auto: null, recPanel: false, countIn: true, recMode: "overdub", recQ: 24 };
 const barT = () => (P.num || 4) * TPQ;
 const songEnd = () => P.bars * barT();
 const trk = () => P.tracks[st.trk];
@@ -3000,6 +3006,63 @@ function busOf(t) {
 }
 const audible = t => !t.mute && (!P.tracks.some(x => x.solo) || t.solo);
 function mixAll() { if (ac && P) { updateDelay(); P.tracks.forEach(busOf); } }
+// ------------------------------------------------------------------ automations (interpolation linéaire + lecture temps réel)
+const AUTO_META = {
+  vol: { n: "Volume", col: "#f5b342", fmt: v => "Vol " + Math.round(v * 127), def: t => (t.vol ?? 80) / 127 },
+  pan: { n: "Pan.", col: "#2bb3c0", fmt: v => { const p = Math.round((v * 2 - 1) * 100); return Math.abs(p) < 4 ? "centre" : (p < 0 ? "G " + -p : "D " + p); }, def: t => ((t.pan || 0) + 1) / 2 },
+  rev: { n: "Réverb", col: "#a371f7", fmt: v => "Réverb " + Math.round(v * 100) + " %", def: t => (t.rev ?? 50) / 100 },
+  dly: { n: "Delay", col: "#3fb27f", fmt: v => "Delay " + Math.round(v * 100) + " %", def: t => (fxOf(t).dly || 0) / 100 }
+};
+const autoPts = (t, k) => { if (!t.auto) t.auto = {}; if (!Array.isArray(t.auto[k])) t.auto[k] = []; return t.auto[k]; };
+function autoVal(pts, tick) {
+  if (!pts || !pts.length) return null;
+  if (tick <= pts[0][0]) return pts[0][1];
+  const last = pts[pts.length - 1];
+  if (tick >= last[0]) return last[1];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (tick >= a[0] && tick <= b[0]) {
+      const span = b[0] - a[0];
+      return span > 0 ? a[1] + (b[1] - a[1]) * ((tick - a[0]) / span) : b[1];
+    }
+  }
+  return last[1];
+}
+function applyAuto(pos) {
+  if (!ac || !P) return;
+  const now = ac.currentTime;
+  for (const t of P.tracks) {
+    if (!t.auto) continue;
+    const b = tBus.get(t.id); if (!b) continue;
+    const aud = audible(t);
+    const vv = autoVal(t.auto.vol, pos);
+    if (vv != null) {
+      const vol = vv * 127, gn = aud ? Math.pow(vol / 100, 2) * (t.kind === "drum" ? 0.55 : 1.1) : 0;
+      b.g.gain.setTargetAtTime(gn, now, 0.025);
+    }
+    const pv = autoVal(t.auto.pan, pos);
+    if (pv != null && b.pn) b.pn.pan.setTargetAtTime(Math.max(-1, Math.min(1, pv * 2 - 1)), now, 0.025);
+    const rv = autoVal(t.auto.rev, pos);
+    if (rv != null) b.sendG.gain.setTargetAtTime(Math.max(0, Math.min(1, rv)), now, 0.025);
+    const dv = autoVal(t.auto.dly, pos);
+    if (dv != null) b.dlyG.gain.setTargetAtTime(Math.max(0, Math.min(1, dv)), now, 0.025);
+  }
+}
+function addAutoFade(dir) {
+  const t = trk(), k = st.auto || "vol"; if (!t) return;
+  const a = P.loop.on && P.loop.b > P.loop.a ? P.loop.a : 0;
+  const b = P.loop.on && P.loop.b > P.loop.a ? P.loop.b : songEnd();
+  mark();
+  const pts = autoPts(t, k).filter(p => p[0] < a || p[0] > b);
+  const v0 = dir === "in" ? 0 : AUTO_META[k].def(t), v1 = dir === "in" ? AUTO_META[k].def(t) : 0;
+  pts.push([a, v0], [b, v1]); pts.sort((x, y) => x[0] - y[0]);
+  t.auto[k] = pts; changed(); draw(); toast(dir === "in" ? `Fade in (${AUTO_META[k].n}) posé.` : `Fade out (${AUTO_META[k].n}) posé.`);
+}
+function clrAuto() {
+  const t = trk(), k = st.auto || "vol"; if (!t) return;
+  if (!t.auto || !t.auto[k] || !t.auto[k].length) { toast("Aucune courbe sur cette piste."); return; }
+  mark(); t.auto[k] = []; mixAll(); changed(); draw(); toast(`Automation ${AUTO_META[k].n} effacée sur « ${t.name} ».`);
+}
 const live = new Set();
 function noteOn(t, p, v, T, dur, gain) {
   if (t.kind === "drum") {
@@ -3050,9 +3113,11 @@ function startPlay() {
   tp.timer = setInterval(sched, 25); sched(); tp.raf = requestAnimationFrame(frame); renderTop();
 }
 function stopPlay(keep) {
+  if (!keep && (rec.on || rec.count)) recStop(true);
   if (!tp.on) return;
   clearInterval(tp.timer); cancelAnimationFrame(tp.raf); tp.on = false; allOff();
   if (acc && acc.drq) { const now = ac.currentTime; acc.drq.forEach(x => { if (x.T > now) { try { x.g.gain.cancelScheduledValues(0); x.g.gain.value = 0; } catch (e) {} } }); }
+  mixAll();
   if (!keep) { renderTop(); draw(); }
 }
 function sched() {
@@ -3085,6 +3150,7 @@ function schedRange(a, b, A) {
 function frame() {
   if (!tp.on) return;
   const pos = tickAt(ac.currentTime);
+  applyAuto(pos);
   if (st.follow) {
     if (st.view === "roll") { const w = cv.width / dpr - KW, x = (pos - st.x0) * st.ppt; if (x > w * 0.85 || x < 0) st.x0 = Math.max(0, pos - (w * 0.1) / st.ppt); }
     else { const w = acv.width / dpr - HW, x = (pos - st.ax0) * st.appt; if (x > w * 0.9 || x < 0) st.ax0 = Math.max(0, pos - (w * 0.05) / st.appt); }
@@ -3193,6 +3259,20 @@ const css = `
 .sqrow .sqc.cur { box-shadow:0 0 0 2px #fff inset; }
 .sqhdr { display:grid; grid-template-columns:86px repeat(16, minmax(0,1fr)); gap:2px; font:700 9px ui-monospace,monospace; color:var(--muted); text-align:center; }
 .sqhdr b { color:var(--gold); }
+#stRec { flex-shrink:0; display:none; flex-direction:column; gap:3px; border-top:2px solid rgba(229,83,75,.75); background:#17121b; padding:4px 6px 6px; }
+#stRec.on { display:flex; }
+#stRecKb { position:relative; height:114px; touch-action:none; }
+#stRecKb .w, #stRecKb .b { position:absolute; top:0; border-radius:0 0 6px 6px; }
+#stRecKb .w { background:#eceff3; border:1px solid #9aa3ad; height:100%; color:#556; font:600 10px system-ui; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; }
+#stRecKb .b { background:#1b1f26; height:62%; z-index:1; border:1px solid #000; }
+#stRecKb .w.sc { background:#fff; box-shadow:inset 0 -5px 0 rgba(74,144,217,.55); }
+#stRecKb .b.sc { box-shadow:inset 0 -5px 0 rgba(74,144,217,.9); }
+#stRecKb .dn { background:#e5534b !important; color:#fff !important; }
+#stRecPads { display:grid; grid-template-columns:repeat(6,1fr); gap:5px; touch-action:none; }
+#stRecPads div { background:#2a2033; border:1px solid rgba(229,83,75,.3); border-radius:9px; height:52px; display:flex; align-items:center; justify-content:center; text-align:center; font:600 11px system-ui; padding:2px; }
+#stRecPads div.dn { background:#e5534b; color:#fff; }
+#stCountIn { font:800 16px ui-monospace,monospace; color:#f5b342; padding:0 6px; }
+.recDot { animation:recPulse 1s infinite; } @keyframes recPulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
 #stStep { flex-shrink:0; display:none; flex-direction:column; gap:2px; border-top:1px solid rgba(245,179,66,.5); background:rgba(245,179,66,.05); padding-bottom:4px; }
 #stStep.on { display:flex; }
 #stKb { position:relative; height:112px; margin:2px 6px 0; touch-action:none; }
@@ -3222,6 +3302,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <div id="stMain"><canvas id="stArrCv"></canvas><div id="stHeads"></div><canvas id="stCv" style="display:none"></canvas></div>
   <div id="stMix"></div>
   <div id="stSeq"></div>
+  <div id="stRec"></div>
   <div id="stStep">
     <div class="strow" id="stStepA"></div>
     <div class="strow" id="stStepB"></div>
@@ -3255,6 +3336,7 @@ function renderTop() {
     <button class="pill" data-a="projects" style="max-width:150px;overflow:hidden;text-overflow:ellipsis">📁 ${esc(P.name)}</button>
     <button class="pill" data-a="home">⏮</button>
     <button class="pill ${tp.on ? "gold" : "on"}" data-a="play" style="min-width:46px">${tp.on ? "⏸" : "▶"}</button>
+    <button class="pill ${rec.on || rec.count ? "red recDot" : st.recPanel ? "red" : ""}" data-a="rec" style="min-width:44px">⏺</button>
     <button class="pill" data-a="stop">⏹</button>
     <span id="stPos"></span>
     <button class="pill ${P.loop.on ? "gold" : ""}" data-a="loop">🔁</button>
@@ -3273,6 +3355,9 @@ function renderBar() {
     el("stBar").innerHTML = `
       <button class="pill gold" data-a="suite">⇩ Suite…</button>
       <button class="pill ${mc ? "on" : ""}" data-a="sections">🏷 Sections${mc ? " (" + mc + ")" : ""}</button>
+      <button class="pill ${st.auto ? "gold" : ""}" data-a="autoToggle">📈 Auto</button>
+      ${st.auto ? Object.entries(AUTO_META).map(([k, m]) => `<button class="pill ${st.auto === k ? "on" : ""}" data-a="autoK" data-v="${k}" style="border-bottom:2px solid ${m.col}">${m.n}</button>`).join("") +
+        `<button class="pill" data-a="autoIn">↗ Fade in</button><button class="pill" data-a="autoOut">↘ Fade out</button><button class="pill" data-a="autoClr">⌫ Courbe</button>` : ""}
       <button class="pill on" data-a="roll">✎ Piano roll</button>
       ${t && t.kind === "drum" ? `<button class="pill ${st.seq ? "gold" : ""}" data-a="seq">⊞ Séq. 16 pas</button>` : ""}
       ${r ? `
@@ -3363,7 +3448,7 @@ function buildKb() {
 }
 function render() {
   if (!P) return;
-  renderTop(); renderBar(); renderHeads(); renderStep(); renderMixer(); renderSeq();
+  renderTop(); renderBar(); renderHeads(); renderStep(); renderMixer(); renderSeq(); renderRec();
   cv.style.display = st.view === "roll" ? "" : "none"; acv.style.display = st.view === "arr" ? "" : "none";
   resize();
 }
@@ -3612,11 +3697,40 @@ function drawArr(pos) {
       }
       g.globalAlpha = 1;
       // Contour de sélection + poignée droite (redimensionnement / boucle)
-      if (sel) {
+      if (sel && !st.auto) {
         g.strokeStyle = "#fff"; g.lineWidth = 1.6; rr(g, rx0 + 1, y + 3, Math.max(4, rw - 2), th - 6, 6); g.stroke();
         g.fillStyle = "#f5b342"; g.fillRect(rx0 + rw - 5, y + 8, 3, th - 16);
       }
     });
+    // Courbe d'automation (si mode 📈 Auto actif)
+    if (st.auto) {
+      const ak = st.auto, am = AUTO_META[ak], pts = (t.auto && t.auto[ak]) || [];
+      const pad = 7, yOf = v => y + th - pad - Math.max(0, Math.min(1, v)) * (th - pad * 2);
+      g.fillStyle = "rgba(10,16,26,.46)"; g.fillRect(HW, y, W - HW, th);
+      if (ak === "pan") { g.strokeStyle = "rgba(255,255,255,.16)"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(HW, yOf(0.5)); g.lineTo(W, yOf(0.5)); g.stroke(); g.setLineDash([]); }
+      const defY = yOf(am.def(t));
+      if (!pts.length) {
+        g.strokeStyle = am.col + "80"; g.lineWidth = 1.5; g.setLineDash([5, 4]);
+        g.beginPath(); g.moveTo(HW, defY); g.lineTo(W, defY); g.stroke(); g.setLineDash([]);
+      } else {
+        g.beginPath();
+        const xFirst = ax(pts[0][0]), xLast = ax(pts[pts.length - 1][0]);
+        g.moveTo(HW, yOf(pts[0][1]));
+        if (xFirst > HW) g.lineTo(xFirst, yOf(pts[0][1]));
+        pts.forEach(([s, v]) => g.lineTo(ax(s), yOf(v)));
+        if (xLast < W) g.lineTo(W, yOf(pts[pts.length - 1][1]));
+        g.strokeStyle = am.col; g.lineWidth = 2.2; g.stroke();
+        g.lineTo(W, y + th - pad); g.lineTo(HW, y + th - pad); g.closePath();
+        g.fillStyle = am.col + "22"; g.fill();
+        pts.forEach(([s, v], pi) => {
+          const px = ax(s), py = yOf(v); if (px < HW - 8 || px > W + 8) return;
+          const act = ag && ag.kind === "auto" && ag.ti === i && ag.pi === pi;
+          g.fillStyle = act ? "#fff" : am.col; g.beginPath(); g.arc(px, py, act ? 6 : 4.5, 0, 7); g.fill();
+          g.strokeStyle = "#0d1420"; g.lineWidth = 1.5; g.stroke();
+          if (act) { g.fillStyle = "#fff"; g.font = "700 10px system-ui"; g.fillText(am.fmt(v), Math.min(W - 60, px + 8), Math.max(y + 13, py - 6)); }
+        });
+      }
+    }
   });
   g.restore(); g.restore();
   ruler(g, W, HW, st.ax0, st.appt);
@@ -3801,6 +3915,26 @@ acv.addEventListener("pointerdown", e => {
   if (y < ARH) { ag = { kind: "ruler", x0: x, y0: y, moved: false }; return; }
   if (y < top) { ag = { kind: "marker", x0: x }; return; }
   const th = ATH(), ti = Math.floor((y - top + st.ay) / th), yInRow = (y - top + st.ay) - ti * th;
+  // Mode Automation : toucher/glisser un point existant, ou toucher pour ajouter un point.
+  if (st.auto && ti >= 0 && ti < P.tracks.length) {
+    const t = P.tracks[ti], ak = st.auto, pts = autoPts(t, ak), pad = 7;
+    const vAtY = yr => Math.max(0, Math.min(1, 1 - (yr - pad) / Math.max(1, th - pad * 2)));
+    const yOfV = v => pad + (1 - v) * (th - pad * 2);
+    let hitPi = -1, bestD = 18;
+    pts.forEach(([s, v], pi) => { const d = Math.hypot(ax(s) - x, yOfV(v) - yInRow); if (d < bestD) { bestD = d; hitPi = pi; } });
+    st.trk = ti;
+    if (hitPi >= 0) {
+      ag = { kind: "auto", ti, pi: hitPi, x0: x, y0: y, moved: false, isNew: false };
+      renderHeads(); draw(); return;
+    }
+    const atx0 = st.ax0 + (x - HW) / st.appt;
+    const snap = st.appt < 0.08 ? barT() : TPQ;
+    const ns = Math.max(0, Math.round(atx0 / snap) * snap), nv = vAtY(yInRow);
+    mark(); pts.push([ns, nv]); pts.sort((a, b) => a[0] - b[0]);
+    const pi = pts.findIndex(p => p[0] === ns && p[1] === nv);
+    ag = { kind: "auto", ti, pi, x0: x, y0: y, moved: true, isNew: true };
+    renderHeads(); draw(); return;
+  }
   const hit = regHitArr(ti, x, yInRow);
   if (hit && hit.edge) {
     ag = { kind: "rsize", ti, r: hit.r, x0: x, origD: hit.r.d, origRep: hit.r.rep || 1, moved: false };
@@ -3823,6 +3957,19 @@ acv.addEventListener("pointermove", e => {
   if (ag.kind === "ruler") { if (Math.abs(x - ag.x0) > 12) ag.moved = true;
     if (ag.moved) { const bt = barT(), a = Math.min(atx(ag.x0), atx(x)), b = Math.max(atx(ag.x0), atx(x));
       P.loop.a = Math.max(0, Math.floor(a / bt) * bt); P.loop.b = Math.max(P.loop.a + bt, Math.ceil(b / bt) * bt); P.loop.on = true; renderTop(); draw(); } return; }
+  if (ag.kind === "auto") {
+    if (!ag.moved && Math.hypot(x - ag.x0, y - ag.y0) < 5) return;
+    if (!ag.moved) { ag.moved = true; mark(); }
+    const t = P.tracks[ag.ti], pts = autoPts(t, st.auto), p = pts[ag.pi];
+    if (!p) return;
+    const th = ATH(), pad = 7, yInRow = (y - top + st.ay) - ag.ti * th;
+    const snap = st.appt < 0.08 ? barT() : TPQ / 2;
+    p[0] = Math.max(0, Math.round(atx(x) / snap) * snap);
+    p[1] = Math.max(0, Math.min(1, 1 - (yInRow - pad) / Math.max(1, th - pad * 2)));
+    pts.sort((a, b) => a[0] - b[0]);
+    ag.pi = pts.indexOf(p);
+    draw(); return;
+  }
   if (ag.kind === "rsize") {
     if (!ag.moved && Math.abs(x - ag.x0) < 6) return;
     if (!ag.moved) { ag.moved = true; mark(); }
@@ -3860,6 +4007,17 @@ function endA(e) {
   if (G.kind === "marker") { const mi = markerAt(atx(G.x0)); if (mi >= 0) markerBox(mi); else sectionsBox(); return; }
   if (G.kind === "ruler") { if (!G.moved && G.y0 > 22 && chordTap(atx(G.x0))) return;
     if (!G.moved) { st.cur = Math.max(0, Math.round(atx(G.x0) / TPQ) * TPQ); stepOps = []; } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "auto") {
+    const t = P.tracks[G.ti], pts = autoPts(t, st.auto);
+    if (!G.moved && !G.isNew) {
+      const now = performance.now(), key = "au" + G.ti + ":" + G.pi;
+      if (lastTap.i === key && now - lastTap.t < 380) {
+        mark(); pts.splice(G.pi, 1); lastTap = { t: 0, i: null }; mixAll(); changed(); draw(); toast("Point d'automation supprimé."); return;
+      }
+      lastTap = { t: now, i: key }; draw(); return;
+    }
+    changed(); draw(); return;
+  }
   if (G.kind === "rsize" || G.kind === "rmove") {
     if (G.moved) { sortRegs(P.tracks[G.ti]); changed(); renderBar(); return; }
     // Tap simple / double-tap sur un clip déjà sélectionné ou son en-tête
@@ -3894,6 +4052,184 @@ function openRoll(atCursor) {
   if (atCursor) { st.x0 = Math.max(0, (R && st.cur < R.s ? R.s : st.cur) - TPQ); }
   centerRoll(); draw();
 }
+
+// ------------------------------------------------------------------ enregistrement MIDI en temps réel (Rec, décompte, overdub, Web MIDI)
+const rec = { on: false, count: 0, timer: null, held: new Map(), added: [], regId: null, marked: false };
+function recStart() {
+  audio(); ac.resume(); mixAll(); preloadAll();
+  if (rec.on || rec.count) { recStop(false); return; }
+  st.recPanel = true; st.mix = false; st.seq = false; st.step = false;
+  rec.added = []; rec.held.clear(); rec.marked = false;
+  const t = trk(); if (!t) return;
+  if (st.countIn) {
+    stopPlay(true);
+    const num = P.num || 4, beatMs = 60000 / (P.bpm || 90);
+    rec.count = num;
+    render();
+    let step = 0;
+    const tick = () => {
+      if (!rec.count) return;
+      const now = ac.currentTime;
+      click(now + 0.01, step === 0);
+      const ci = el("stCountIn"); if (ci) ci.textContent = `⏱ ${num - step}…`;
+      step++;
+      if (step < num) rec.timer = setTimeout(tick, beatMs);
+      else rec.timer = setTimeout(() => {
+        rec.count = 0; rec.on = true; rec.marked = false;
+        startPlay(); renderTop(); renderRecStatus();
+      }, beatMs);
+    };
+    tick();
+  } else {
+    rec.on = true;
+    if (!tp.on) startPlay();
+    render();
+  }
+}
+function recStop(fromStopPlay) {
+  clearTimeout(rec.timer); rec.timer = null;
+  const wasOn = rec.on; rec.count = 0; rec.on = false;
+  // Ferme toutes les notes encore tenues.
+  const nowTick = tp.on && ac ? Math.max(0, Math.round(tickAt(ac.currentTime))) : st.cur;
+  rec.held.forEach(h => {
+    if (h.vo) { try { h.vo.stop(); } catch (e) {} }
+    if (h.note) h.note.d = Math.max(12, nowTick - (h.regS + h.note.s));
+  });
+  rec.held.clear();
+  if (wasOn && rec.added.length) {
+    const t = trk(), R = activeReg(t);
+    if (R) {
+      if (st.recQ > 0) {
+        const g = st.recQ;
+        rec.added.forEach(n => { n.s = Math.max(0, Math.round((R.s + n.s) / g) * g - R.s); });
+      }
+      growReg(R); R.notes.sort((a, b) => a.s - b.s);
+      changed();
+    }
+    toast(`✓ ${rec.added.length} note(s) enregistrée(s)${st.recQ ? " (quantifiées)" : ""}.`);
+  }
+  rec.added = [];
+  if (!fromStopPlay && tp.on) stopPlay(true);
+  renderTop(); renderRecStatus(); draw();
+}
+function recLiveNoteOn(keyId, p, vel = 96) {
+  audio(); ac.resume();
+  const t = trk(); if (!t) return;
+  let vo = null;
+  if (t.kind === "drum") noteOn(t, p, vel, ac.currentTime, 0.1);
+  else vo = play(p, vel / 127, t.snd || "hq:grand", busOf(t), false, 0);
+  const entry = { p, vo, note: null, regS: 0 };
+  if (rec.on && tp.on) {
+    if (!rec.marked) {
+      mark(); rec.marked = true;
+      if (st.recMode === "replace") {
+        const L = P.loop;
+        const a = L.on && L.b > L.a ? L.a : st.cur, b = L.on && L.b > L.a ? L.b : songEnd();
+        clearRange(t, a, b);
+      }
+    }
+    const tick = Math.max(0, Math.round(tickAt(ac.currentTime)));
+    const R = ensureReg(t, tick);
+    if (tick < R.s) { const bt = barT(), ns = Math.floor(tick / bt) * bt, diff = R.s - ns; R.s = ns; R.d += diff; R.notes.forEach(m => { m.s += diff; }); }
+    const rel = tick - R.s;
+    const n = { p, s: rel, d: t.kind === "drum" ? 24 : 48, v: Math.max(1, Math.min(127, vel)), i: nid++ };
+    R.notes.push(n); growReg(R); R.notes.sort((a, b) => a.s - b.s);
+    rec.added.push(n);
+    entry.note = n; entry.regS = R.s;
+  }
+  rec.held.set(keyId, entry);
+}
+function recLiveNoteOff(keyId) {
+  const h = rec.held.get(keyId); if (!h) return;
+  rec.held.delete(keyId);
+  if (h.vo) { const vo = h.vo; setTimeout(() => { try { vo.stop(); } catch (e) {} }, 80); }
+  if (h.note && tp.on && trk().kind !== "drum") {
+    const tick = Math.max(0, Math.round(tickAt(ac.currentTime)));
+    const d = tick - (h.regS + h.note.s);
+    if (d > 6) { h.note.d = d; const R = activeReg(); if (R) growReg(R); }
+  }
+}
+function renderRecStatus() {
+  const ci = el("stCountIn"); if (!ci) return;
+  ci.textContent = rec.count ? `⏱ ${rec.count}…` : rec.on ? "● ENREGISTREMENT" : "● Prêt";
+  ci.style.color = rec.on ? "#e5534b" : "#f5b342";
+}
+function renderRec() {
+  const E = el("stRec"); E.classList.toggle("on", !!st.recPanel);
+  if (!st.recPanel) return;
+  const t = trk(), drumT = t && t.kind === "drum";
+  E.innerHTML = `<div class="strow" style="padding:0 0 2px">
+      <button class="pill ${rec.on || rec.count ? "red recDot" : "red"}" data-rc="go">${rec.on ? "⏹ Stop Rec" : rec.count ? "✕ Annuler" : "⏺ Démarrer Rec"}</button>
+      <span id="stCountIn"></span>
+      <button class="pill ${st.countIn ? "gold" : ""}" data-rc="ci">Décompte : ${st.countIn ? "1 mes." : "Off"}</button>
+      <button class="pill ${st.recMode === "replace" ? "red" : "on"}" data-rc="mode">${st.recMode === "replace" ? "Remplacer" : "Overdub"}</button>
+      <button class="pill ${st.recQ ? "on" : ""}" data-rc="rq">Auto-Q : ${st.recQ === 48 ? "1/8" : st.recQ === 24 ? "1/16" : "Libre"}</button>
+      ${drumT ? "" : `<span class="lbl2">Oct</span><button class="pill" data-rc="oct-">−</button><span class="lbl2">Do${st.kbOct - 2}</span><button class="pill" data-rc="oct+">+</button>`}
+      <button class="pill" data-rc="close">✕</button></div>
+    ${drumT ? `<div id="stRecPads">${DR.slice().reverse().map(d => `<div data-rp="${d[0]}">${d[2]}</div>`).join("")}</div>`
+      : `<div id="stRecKb"></div><div class="strow" style="padding:2px 0 0"><span class="lbl2">Accords direct</span>${degChords().map((c, k) => `<button class="pill" data-rch="${k}"><b style="color:var(--gold)">${c.lab}</b> ${esc(cName(c))}</button>`).join("")}</div>`}`;
+  renderRecStatus();
+  if (!drumT) {
+    const kb = el("stRecKb"), W = kb.clientWidth || 360, lo = 12 * st.kbOct, nW = W >= 640 ? 21 : 14;
+    const whites = []; for (let p = lo; whites.length < nW; p++) if (!BLACK.includes(p % 12)) whites.push(p);
+    const hi = whites[whites.length - 1], ww = W / nW, sc = scalePcs();
+    let h = "";
+    whites.forEach((p, i) => { h += `<div class="w ${sc.has(p % 12) ? "sc" : ""}" data-rp="${p}" style="left:${i * ww}px;width:${ww}px">${p % 12 === 0 ? noteName(p) : ""}</div>`; });
+    for (let p = lo; p <= hi; p++) if (BLACK.includes(p % 12)) { const i = whites.indexOf(p - 1); h += `<div class="b ${sc.has(p % 12) ? "sc" : ""}" data-rp="${p}" style="left:${(i + 1) * ww - ww * 0.31}px;width:${ww * 0.62}px"></div>`; }
+    kb.innerHTML = h;
+  }
+}
+el("stRec").addEventListener("pointerdown", e => {
+  const pk = e.target.closest("[data-rp]");
+  if (pk) {
+    e.preventDefault(); el("stRec").setPointerCapture?.(e.pointerId);
+    pk.classList.add("dn");
+    recLiveNoteOn("p" + e.pointerId, +pk.dataset.rp, 96);
+    pk._pid = e.pointerId; return;
+  }
+  const ch = e.target.closest("[data-rch]");
+  if (ch) {
+    e.preventDefault();
+    const c = degChords()[+ch.dataset.rch]; if (!c) return;
+    ch.classList.add("gold");
+    const ns = chordNotes(c);
+    ns.forEach((p, idx) => recLiveNoteOn(`c${e.pointerId}_${idx}`, p, 86));
+    ch._cids = ns.map((_, idx) => `c${e.pointerId}_${idx}`);
+    ch._pid = e.pointerId;
+  }
+});
+const recPtrUp = e => {
+  el("stRec").querySelectorAll(".dn").forEach(k => { if (k._pid === e.pointerId) { k.classList.remove("dn"); delete k._pid; } });
+  recLiveNoteOff("p" + e.pointerId);
+  el("stRec").querySelectorAll("[data-rch].gold").forEach(k => { if (k._pid === e.pointerId) { (k._cids || []).forEach(recLiveNoteOff); k.classList.remove("gold"); delete k._pid; } });
+};
+el("stRec").addEventListener("pointerup", recPtrUp); el("stRec").addEventListener("pointercancel", recPtrUp);
+el("stRec").addEventListener("click", e => {
+  const b = e.target.closest("[data-rc]"); if (!b) return;
+  const a = b.dataset.rc;
+  if (a === "go") recStart();
+  else if (a === "ci") { st.countIn = !st.countIn; renderRec(); }
+  else if (a === "mode") { st.recMode = st.recMode === "overdub" ? "replace" : "overdub"; renderRec(); }
+  else if (a === "rq") { st.recQ = st.recQ === 24 ? 48 : st.recQ === 48 ? 0 : 24; renderRec(); }
+  else if (a === "oct-") { st.kbOct = Math.max(2, st.kbOct - 1); renderRec(); }
+  else if (a === "oct+") { st.kbOct = Math.min(7, st.kbOct + 1); renderRec(); }
+  else if (a === "close") { if (rec.on || rec.count) recStop(false); st.recPanel = false; render(); }
+});
+// Clavier maître matériel USB / Bluetooth (Web MIDI API, si disponible sur l'appareil).
+try {
+  if (navigator.requestMIDIAccess) navigator.requestMIDIAccess().then(ma => {
+    const bind = inp => {
+      inp.onmidimessage = ev => {
+        if (!root.classList.contains("on") || !P) return;
+        const [stB, d1, d2] = ev.data, cmd = stB & 0xf0;
+        if (cmd === 0x90 && d2 > 0) recLiveNoteOn("m" + d1, d1, d2);
+        else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) recLiveNoteOff("m" + d1);
+      };
+    };
+    ma.inputs.forEach(bind);
+    ma.onstatechange = () => ma.inputs.forEach(bind);
+  }).catch(() => {});
+} catch (e) {}
 
 // ------------------------------------------------------------------ saisie pas à pas
 let stepOps = [], held = new Map(), grp = null;
@@ -4841,11 +5177,17 @@ root.addEventListener("click", e => {
     case "projects": projectsBox(); break;
     case "home": st.cur = P.loop.on ? P.loop.a : 0; st.x0 = Math.max(0, st.cur - TPQ); st.ax0 = 0; stepOps = []; if (tp.on) startPlay(); renderTop(); draw(); break;
     case "play": if (tp.on) { const p = tickAt(ac.currentTime); stopPlay(); st.cur = Math.max(0, Math.floor(p / TPQ) * TPQ); renderTop(); draw(); } else startPlay(); break;
+    case "rec": recStart(); break;
     case "stop": stopPlay(); renderTop(); draw(); break;
     case "loop": P.loop.on = !P.loop.on; if (P.loop.on && !(P.loop.b > P.loop.a)) { P.loop.a = 0; P.loop.b = songEnd(); } storeSoon(); renderTop(); draw(); break;
     case "metro": st.metro = !st.metro; renderTop(); break;
-    case "mix": st.mix = !st.mix; if (st.mix) { st.step = false; st.seq = false; } render(); break;
-    case "seq": st.seq = !st.seq; if (st.seq) { st.mix = false; st.step = false; } render(); break;
+    case "mix": st.mix = !st.mix; if (st.mix) { st.step = false; st.seq = false; st.recPanel = false; } render(); break;
+    case "seq": st.seq = !st.seq; if (st.seq) { st.mix = false; st.step = false; st.recPanel = false; } render(); break;
+    case "autoToggle": st.auto = st.auto ? null : "vol"; renderBar(); draw(); if (st.auto) toast("Automation active : touche une piste pour poser/glisser des points (double-tap = effacer)."); break;
+    case "autoK": st.auto = b.dataset.v; renderBar(); draw(); break;
+    case "autoIn": addAutoFade("in"); break;
+    case "autoOut": addAutoFade("out"); break;
+    case "autoClr": clrAuto(); break;
     case "scaleLock": st.scaleLock = !st.scaleLock; renderBar(); toast(st.scaleLock ? `Gamme verrouillée (${keyName()}) : impossible de poser une note hors gamme.` : "Verrouillage de gamme désactivé."); break;
     case "midiTools": midiToolsBox(); break;
     case "sections": sectionsBox(); break;
@@ -4884,7 +5226,7 @@ root.addEventListener("click", e => {
     case "vol-": case "vol+": { const t = P.tracks[ti]; t.vol = Math.max(0, Math.min(127, t.vol + (a === "vol+" ? 8 : -8))); mixAll(); storeSoon(); renderHeads(); break; }
     case "volv": volBox(ti); break;
     case "pickTrk": trkPickBox(); break;
-    case "step": st.step = !st.step; if (st.step) { st.mix = false; st.seq = false; } grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
+    case "step": st.step = !st.step; if (st.step) { st.mix = false; st.seq = false; st.recPanel = false; } grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
     case "pencil": st.pencil = !st.pencil; renderBar(); toast(st.pencil ? "Crayon : un toucher dans la grille pose une note." : "Crayon retiré : un toucher dans la grille ne pose rien."); break;
     case "grid": gridBox(); break;
     case "quant": doQuant(); break;
@@ -4922,7 +5264,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll, doQuant, midiHumanize, midiLegato, midiDurOp, midiVelOp, midiScaleQuant, midiRetro, midiInvert, midiToolsBox, seqApplyPreset, seqVariation, seqSetCell, renderSeq },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll, doQuant, midiHumanize, midiLegato, midiDurOp, midiVelOp, midiScaleQuant, midiRetro, midiInvert, midiToolsBox, seqApplyPreset, seqVariation, seqSetCell, renderSeq, autoVal, applyAuto, addAutoFade, clrAuto, rec, recStart, recStop, recLiveNoteOn, recLiveNoteOff, renderRec },
 };
 return api;
 })();
