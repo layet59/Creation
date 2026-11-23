@@ -2530,12 +2530,78 @@ const LENS = [["Ronde", 384, "ronde"], ["Blanche", 192, "blanche"], ["♩ Noire"
 const VELS = [["pp", 36], ["p", 56], ["mf", 80], ["f", 102], ["ff", 122]];
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-// ------------------------------------------------------------------ projets
+// ------------------------------------------------------------------ projets, régions (clips) et marqueurs de structure
 const LS = "studio1";
+const SEC_PRESETS = [
+  ["Intro", "#2bb3c0", 4], ["Couplet", "#4a90d9", 8], ["Pré-refrain", "#a371f7", 4],
+  ["Refrain", "#f5b342", 8], ["Pont", "#e07bb5", 4], ["Solo", "#e5534b", 8],
+  ["Break", "#9aa5b1", 2], ["Outro", "#3fb27f", 4]
+];
 let DB = (() => { try { return JSON.parse(localStorage.getItem(LS) || "null"); } catch (e) { return null; } })() || { cur: null, list: [] };
-let nid = 1;
-const pack = P => ({ ...P, tracks: P.tracks.map(t => ({ ...t, notes: t.notes.map(n => [n.p, n.s, n.d, n.v]) })) });
-const unpack = P => { P.tracks.forEach(t => { t.notes = (t.notes || []).map(n => Array.isArray(n) ? { p: n[0], s: n[1], d: n[2], v: n[3], i: nid++ } : { ...n, i: nid++ }); }); return P; };
+let nid = 1, rid = 1;
+const uid = pfx => pfx + Math.random().toString(36).slice(2, 7) + (rid++).toString(36);
+const regSpan = r => Math.max(1, r.d) * Math.max(1, r.rep || 1);
+const regEnd = r => r.s + regSpan(r);
+const regCol = (r, t) => r.color || t.color;
+function mkReg(name, s, d, notes = [], color = "") {
+  return { id: uid("r"), name: name || "Clip", s: Math.max(0, Math.round(s)), d: Math.max(TPQ, Math.round(d)), rep: 1, mute: false, color, notes };
+}
+function sortRegs(t) { (t.regions || []).sort((a, b) => a.s - b.s); }
+function flatNotes(t, incMute = false) {
+  const out = [];
+  for (const r of (t.regions || [])) {
+    if (!incMute && r.mute) continue;
+    const rep = Math.max(1, r.rep || 1);
+    for (let k = 0; k < rep; k++) {
+      const off = r.s + k * r.d;
+      for (const n of r.notes) {
+        if (n.s < 0 || n.s >= r.d) continue;
+        const d = Math.min(n.d, r.d - n.s);
+        if (d > 0) out.push({ p: n.p, s: off + n.s, d, v: n.v, i: n.i, regId: r.id, rep: k });
+      }
+    }
+  }
+  return out;
+}
+function pack(P) {
+  return {
+    ...P,
+    markers: (P.markers || []).map(m => ({ id: m.id, n: m.name, s: m.s, d: m.d, c: m.color })),
+    tracks: P.tracks.map(t => {
+      const { notes, ...rest } = t; void notes;
+      return {
+        ...rest,
+        regions: (t.regions || []).map(r => ({
+          id: r.id, n: r.name, s: r.s, d: r.d, rep: r.rep || 1, m: r.mute ? 1 : 0, c: r.color || "",
+          ns: r.notes.map(n => [n.p, n.s, n.d, n.v])
+        }))
+      };
+    })
+  };
+}
+function unpack(P) {
+  const bt = (P.num || 4) * TPQ;
+  P.markers = (P.markers || []).map(m => ({ id: m.id || uid("m"), name: m.n ?? m.name ?? "Section", s: Math.max(0, m.s | 0), d: Math.max(bt, m.d | 0), color: m.c || m.color || "#4a90d9" })).sort((a, b) => a.s - b.s);
+  const upN = arr => (arr || []).map(n => Array.isArray(n) ? { p: n[0], s: n[1], d: n[2], v: n[3], i: nid++ } : { ...n, i: nid++ });
+  P.tracks.forEach(t => {
+    if (Array.isArray(t.regions)) {
+      t.regions = t.regions.map(r => ({
+        id: r.id || uid("r"), name: r.n ?? r.name ?? t.name, s: Math.max(0, r.s | 0), d: Math.max(TPQ, r.d | 0),
+        rep: Math.max(1, r.rep | 0), mute: !!(r.m ?? r.mute), color: r.c ?? r.color ?? "",
+        notes: upN(r.ns ?? r.notes)
+      }));
+    } else {
+      const ns = upN(t.notes);
+      if (ns.length) {
+        const end = Math.max(bt, Math.ceil(Math.max(...ns.map(n => n.s + n.d)) / bt) * bt);
+        t.regions = [mkReg(t.name, 0, end, ns)];
+      } else t.regions = [];
+    }
+    delete t.notes;
+    sortRegs(t);
+  });
+  return P;
+}
 // Projets recopiés côté Linux, rendus par la page Musique dans l'adresse (#st=) : un navigateur vidé les retrouve.
 try {
   const h = new URLSearchParams(location.hash.slice(1)).get("st");
@@ -2545,12 +2611,12 @@ try {
 function newProject(name) {
   const k = { root: S.root, rootL: S.rootL, mode: S.mode, stack: S.stack };
   return { id: "p" + Date.now().toString(36), name: name || "Projet " + (DB.list.length + 1), bpm: S.bpm || 90, num: 4, bars: 8, key: k,
-    loop: { on: true, a: 0, b: 4 * 4 * TPQ }, chords: [], d: Date.now(),
+    loop: { on: true, a: 0, b: 4 * 4 * TPQ }, chords: [], markers: [], d: Date.now(),
     tracks: [mkTrack("Mélodie", "inst", S.tSolo || "hq:grand", 0), mkTrack("Accords", "inst", S.tPad || "hq:grand", 1)] };
 }
 function mkTrack(name, kind, snd, ci) {
   return { id: "t" + Math.random().toString(36).slice(2, 8), name, kind, snd: kind === "drum" ? null : snd, kit: kind === "drum" ? (S.kit || "synth") : null,
-    vol: 80, pan: 0, mute: false, solo: false, color: COLORS[ci % COLORS.length], notes: [] };
+    vol: 80, pan: 0, mute: false, solo: false, color: COLORS[ci % COLORS.length], regions: [] };
 }
 let P = null;
 function openProject(id) {
@@ -2559,6 +2625,7 @@ function openProject(id) {
   if (!raw) DB.list.push(pack(P));
   DB.cur = P.id; undoS = []; redoS = []; stepOps = [];
   st.trk = Math.min(st.trk, P.tracks.length - 1); if (st.trk < 0) st.trk = 0;
+  st.regId = P.tracks[st.trk]?.regions[0]?.id || null;
   st.cur = 0; storeSoon(); preloadAll();
 }
 let storeT = null, mirrorT2 = null;
@@ -2568,36 +2635,269 @@ function store() {
   const k = DB.list.findIndex(p => p.id === P.id), pk = pack(P);
   if (k < 0) DB.list.push(pk); else DB.list[k] = pk;
   try { localStorage.setItem(LS, JSON.stringify(DB)); } catch (e) {}
-  clearTimeout(mirrorT2); mirrorT2 = setTimeout(() => send("daw|" + JSON.stringify(DB)), 4000);
+  clearTimeout(mirrorT2); mirrorT2 = setTimeout(() => send("daw", "-", JSON.stringify(DB)), 4000);
 }
 const storeSoon = () => { clearTimeout(storeT); storeT = setTimeout(store, 700); };
 // Les messages pour Linux passent par le titre de la page, un à la fois (la page Musique ne lit que le dernier).
 const outQ = []; let outT = null;
-function send(msg) { if (msg.startsWith("daw|")) { const k = outQ.findIndex(m => m.startsWith("daw|")); if (k >= 0) outQ.splice(k, 1); }
-  outQ.push(msg); if (!outT) pump(); }
-function pump() { const m = outQ.shift(); if (!m) { outT = null; return; } try { document.title = m; } catch (e) {} outT = setTimeout(pump, 1600); }
+// Le titre est coupé vers 4 000 caractères : un envoi part en morceaux « ch|id|k|n|genre:nom|données », que la page
+// Musique range dans ~/.cache/studio-in/ et rassemble quand tous sont là (dans n'importe quel ordre).
+let sendN = 0;
+function send(kind, name, data) {
+  if (kind === "daw") for (let k = outQ.length - 1; k >= 0; k--) if (outQ[k].kind === "daw") outQ.splice(k, 1);   // seule la dernière copie compte
+  const id = Date.now().toString(36) + (++sendN), C = 3500, n = Math.max(1, Math.ceil(data.length / C));
+  for (let k = 0; k < n; k++) outQ.push({ kind, m: `ch|${id}|${k}|${n}|${kind}:${name}|${data.slice(k * C, (k + 1) * C)}` });
+  if (!outT) pump();
+}
+function pump() { const o = outQ.shift(); if (!o) { outT = null; return; } try { document.title = o.m; } catch (e) {} outT = setTimeout(pump, 1100); }
 
 // ------------------------------------------------------------------ annuler / rétablir
 let undoS = [], redoS = [];
-const snap = () => JSON.stringify({ t: pack(P).tracks, c: P.chords, b: P.bars });
+const snap = () => { const pk = pack(P); return JSON.stringify({ t: pk.tracks, c: P.chords, b: P.bars, m: pk.markers, s: P.suite || null }); };
+function restore(s) {
+  const o = JSON.parse(s);
+  const tmp = unpack({ num: P.num, tracks: o.t, markers: o.m || [] });
+  P.tracks = tmp.tracks; P.markers = tmp.markers; P.chords = o.c; P.bars = o.b; P.suite = o.s || null;
+  st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1));
+  if (!activeReg()) st.regId = trk()?.regions[0]?.id || null;
+  st.sel.clear(); stepOps = [];
+}
 function mark() { undoS.push(snap()); if (undoS.length > 80) undoS.shift(); redoS = []; }
-function restore(s) { const o = JSON.parse(s); P.tracks = unpack({ tracks: o.t }).tracks; P.chords = o.c; P.bars = o.b; st.sel.clear(); stepOps = []; }
 function undo() { if (!undoS.length) return; redoS.push(snap()); restore(undoS.pop()); changed(); }
 function redo() { if (!redoS.length) return; undoS.push(snap()); restore(redoS.pop()); changed(); }
 function changed() { fitBars(); storeSoon(); draw(); renderTop(); }
 
 // ------------------------------------------------------------------ état de l'affichage
-const st = { view: "arr", trk: 0, cur: 0, sel: new Set(), grid: 24, len: 96, dot: false, tri: false, vel: 80, pencil: true, step: false,
+const st = { view: "arr", trk: 0, regId: null, cur: 0, sel: new Set(), grid: 24, len: 96, dot: false, tri: false, vel: 80, pencil: true, step: false,
   x0: 0, ppt: 0.9, y0: null, rh: 16, ax0: 0, ay: 0, appt: 0.12, ghost: true, kbOct: 4, follow: true, metro: false, chordHold: false, velLane: true };
 const barT = () => (P.num || 4) * TPQ;
 const songEnd = () => P.bars * barT();
 const trk = () => P.tracks[st.trk];
+function activeReg(t = trk()) {
+  if (!t || !t.regions.length) return null;
+  if (st.regId) { const r = t.regions.find(x => x.id === st.regId); if (r) return r; }
+  const at = t.regions.find(r => st.cur >= r.s && st.cur < regEnd(r));
+  return at || t.regions[0];
+}
+function ensureReg(t = trk(), atTick = st.cur) {
+  let r = t.regions.find(x => x.id === st.regId) || t.regions.find(x => atTick >= x.s && atTick < x.s + x.d);
+  if (!r) {
+    const bt = barT(), s0 = Math.max(0, Math.floor(atTick / bt) * bt);
+    r = mkReg(t.name, s0, Math.min(4 * bt, Math.max(bt, songEnd() - s0)), []);
+    t.regions.push(r); sortRegs(t);
+  }
+  st.regId = r.id;
+  return r;
+}
+function growReg(r) {
+  if (!r || !r.notes.length) return;
+  const bt = barT();
+  const minS = Math.min(...r.notes.map(n => n.s));
+  if (minS < 0) {
+    const shift = Math.ceil(-minS / bt) * bt;
+    const real = Math.min(r.s, shift);
+    r.s -= real; r.d += real; r.notes.forEach(n => { n.s = Math.max(0, n.s + real); });
+  }
+  const maxE = Math.max(...r.notes.map(n => n.s + n.d));
+  if (maxE > r.d) r.d = Math.ceil(maxE / bt) * bt;
+}
 function fitBars() {
-  let end = 0; P.tracks.forEach(t => t.notes.forEach(n => { end = Math.max(end, n.s + n.d); }));
+  let end = 0;
+  P.tracks.forEach(t => t.regions.forEach(r => { end = Math.max(end, regEnd(r)); }));
+  (P.markers || []).forEach(m => { end = Math.max(end, m.s + m.d); });
   const need = Math.ceil(end / barT()); if (need > P.bars) P.bars = need;
 }
 const snapT = (t, g = st.grid) => Math.round(t / g) * g;
 const stepLen = () => Math.max(1, Math.round(st.len * (st.dot ? 1.5 : 1) * (st.tri ? 2 / 3 : 1)));
+
+// ------------------------------------------------------------------ opérations sur les clips & sections (façon Logic / Cubase)
+let clipReg = null;
+function flattenRegNotes(r) {
+  const out = [], rep = Math.max(1, r.rep || 1);
+  for (let k = 0; k < rep; k++) for (const n of r.notes) {
+    if (n.s < 0 || n.s >= r.d) continue;
+    const d = Math.min(n.d, r.d - n.s);
+    if (d > 0) out.push({ p: n.p, s: k * r.d + n.s, d, v: n.v, i: nid++ });
+  }
+  return out;
+}
+function flattenReg(r) {
+  if ((r.rep || 1) <= 1) return;
+  r.notes = flattenRegNotes(r); r.d = regSpan(r); r.rep = 1;
+}
+function splitRegionAt(t, r, tick) {
+  const end = regEnd(r);
+  if (tick <= r.s || tick >= end) return null;
+  const idx = t.regions.indexOf(r); if (idx < 0) return null;
+  const rel = tick - r.s;
+  // Si la coupe tombe exactement sur une frontière de boucle : on garde les deux morceaux bouclés !
+  if (r.rep > 1 && rel % r.d === 0) {
+    const k = rel / r.d;
+    const right = { ...r, id: uid("r"), s: tick, rep: r.rep - k, notes: r.notes.map(n => ({ ...n, i: nid++ })) };
+    r.rep = k;
+    t.regions.splice(idx + 1, 0, right);
+    sortRegs(t); return [r, right];
+  }
+  if (r.rep > 1) flattenReg(r);
+  const leftN = [], rightN = [];
+  for (const n of r.notes) {
+    if (n.s + n.d <= rel) leftN.push(n);
+    else if (n.s >= rel) rightN.push({ ...n, s: n.s - rel, i: nid++ });
+    else {
+      leftN.push({ ...n, d: rel - n.s });
+      if (t.kind !== "drum") rightN.push({ p: n.p, s: 0, d: n.s + n.d - rel, v: n.v, i: nid++ });
+    }
+  }
+  const right = { id: uid("r"), name: r.name, s: tick, d: r.d - rel, rep: 1, mute: r.mute, color: r.color, notes: rightN };
+  r.d = rel; r.notes = leftN;
+  t.regions.splice(idx + 1, 0, right);
+  sortRegs(t); return [r, right];
+}
+function splitAllAt(tick) {
+  P.tracks.forEach(t => {
+    for (const r of [...t.regions]) if (r.s < tick && regEnd(r) > tick) splitRegionAt(t, r, tick);
+  });
+  splitChordsAt(tick);
+}
+function splitChordsAt(tick) {
+  if (!P.chords || !P.chords.length) return;
+  const out = [];
+  for (const c of P.chords) {
+    if (c.s < tick && c.s + c.d > tick) {
+      out.push({ ...c, d: tick - c.s });
+      out.push({ ...c, s: tick, d: c.s + c.d - tick });
+    } else out.push(c);
+  }
+  P.chords = out;
+}
+function clearRange(t, a, b) {
+  if (!(b > a)) return;
+  for (const r of [...t.regions]) {
+    if (r.s < a && regEnd(r) > a) splitRegionAt(t, r, a);
+  }
+  for (const r of [...t.regions]) {
+    if (r.s < b && regEnd(r) > b) splitRegionAt(t, r, b);
+  }
+  t.regions = t.regions.filter(r => regEnd(r) <= a || r.s >= b);
+}
+function splitAtCur(allTracks = false) {
+  const tick = st.cur;
+  if (allTracks) {
+    let hit = false;
+    P.tracks.forEach(t => { if (t.regions.some(r => r.s < tick && regEnd(r) > tick)) hit = true; });
+    if (!hit) { toast("Place le curseur bleu à l'intérieur d'un clip pour scinder."); return; }
+    mark(); splitAllAt(tick); changed(); render(); toast("Toutes les pistes scindées au curseur."); return;
+  }
+  const t = trk();
+  let r = activeReg(t);
+  if (!r || tick <= r.s || tick >= regEnd(r)) r = t.regions.find(x => tick > x.s && tick < regEnd(x));
+  if (!r) { toast("Place le curseur bleu à l'intérieur d'un clip pour le scinder."); return; }
+  mark(); const res = splitRegionAt(t, r, tick);
+  if (res) st.regId = res[1].id;
+  changed(); render(); toast("Clip scindé en deux.");
+}
+function dupReg() {
+  const t = trk(), r = activeReg(t); if (!r) { toast("Sélectionne un clip d'abord."); return; }
+  mark();
+  const c = { ...r, id: uid("r"), s: regEnd(r), notes: r.notes.map(n => ({ ...n, i: nid++ })) };
+  t.regions.push(c); sortRegs(t); st.regId = c.id; changed(); render(); toast("Clip dupliqué.");
+}
+function mergeReg() {
+  const t = trk(), r = activeReg(t); if (!r) return;
+  sortRegs(t); const idx = t.regions.indexOf(r);
+  if (idx < 0 || idx + 1 >= t.regions.length) { toast("Aucun clip suivant sur cette piste à fusionner."); return; }
+  const nxt = t.regions[idx + 1];
+  mark();
+  const ns1 = flattenRegNotes(r), ns2 = flattenRegNotes(nxt).map(n => ({ ...n, s: n.s + (nxt.s - r.s) }));
+  const end = Math.max(regEnd(r), regEnd(nxt));
+  r.d = end - r.s; r.rep = 1; r.notes = [...ns1, ...ns2].sort((a, b) => a.s - b.s);
+  t.regions.splice(idx + 1, 1); changed(); render(); toast("Clips fusionnés.");
+}
+function delReg() {
+  const t = trk(), r = activeReg(t); if (!r) return;
+  mark(); t.regions = t.regions.filter(x => x.id !== r.id);
+  st.regId = t.regions[0]?.id || null; st.sel.clear(); changed(); render(); toast("Clip supprimé.");
+}
+function addEmptyReg() {
+  const t = trk(), bt = barT(), s0 = Math.max(0, Math.floor(st.cur / bt) * bt);
+  const d = P.loop.on && P.loop.b > P.loop.a ? Math.max(bt, P.loop.b - P.loop.a) : 4 * bt;
+  mark(); const r = mkReg(t.name, s0, d, []); t.regions.push(r); sortRegs(t); st.regId = r.id;
+  changed(); render(); toast("Nouveau clip créé.");
+}
+function sliceAtMarkers() {
+  if (!P.markers || !P.markers.length) { toast("Ajoute d'abord des sections."); return; }
+  mark();
+  const cuts = new Set();
+  P.markers.forEach(m => { cuts.add(m.s); cuts.add(m.s + m.d); });
+  [...cuts].sort((a, b) => a - b).forEach(splitAllAt);
+  // Nommer les clips selon la section dans laquelle ils tombent.
+  P.tracks.forEach(t => t.regions.forEach(r => {
+    const m = P.markers.find(x => r.s >= x.s && r.s < x.s + x.d);
+    if (m) r.name = m.name;
+  }));
+  changed(); render(); toast("Clips découpés selon les sections.");
+}
+function dupSection(mi) {
+  const m = P.markers[mi]; if (!m) return;
+  const a = m.s, b = m.s + m.d, span = m.d;
+  mark(); splitAllAt(a); splitAllAt(b);
+  P.tracks.forEach(t => {
+    const inS = t.regions.filter(r => r.s >= a && r.s < b);
+    t.regions.forEach(r => { if (r.s >= b) r.s += span; });
+    inS.forEach(r => t.regions.push({ ...r, id: uid("r"), s: r.s + span, notes: r.notes.map(n => ({ ...n, i: nid++ })) }));
+    sortRegs(t);
+  });
+  if (P.chords) {
+    const inC = P.chords.filter(c => c.s >= a && c.s < b);
+    P.chords.forEach(c => { if (c.s >= b) c.s += span; });
+    inC.forEach(c => P.chords.push({ ...c, s: c.s + span })); P.chords.sort((x, y) => x.s - y.s);
+  }
+  P.markers.forEach(x => { if (x.s >= b) x.s += span; });
+  P.markers.push({ id: uid("m"), name: m.name + " (bis)", s: b, d: span, color: m.color });
+  P.markers.sort((x, y) => x.s - y.s);
+  P.bars += Math.ceil(span / barT());
+  P.loop = { on: true, a: b, b: b + span };
+  changed(); render(); toast(`Section « ${m.name} » dupliquée.`);
+}
+function moveSection(mi, dir) {
+  const j = mi + dir; if (j < 0 || j >= P.markers.length) return;
+  const iA = Math.min(mi, j), iB = Math.max(mi, j);
+  const A = P.markers[iA], B = P.markers[iB];
+  const a0 = A.s, a1 = A.s + A.d, b0 = B.s, b1 = B.s + B.d;
+  const shiftA = b1 - a1, shiftB = -(b0 - a0);
+  mark(); [a0, a1, b0, b1].forEach(splitAllAt);
+  const remap = s => (s >= a0 && s < a1) ? s + shiftA : (s >= b0 && s < b1) ? s + shiftB : s;
+  P.tracks.forEach(t => { t.regions.forEach(r => { r.s = remap(r.s); }); sortRegs(t); });
+  if (P.chords) { P.chords.forEach(c => { c.s = remap(c.s); }); P.chords.sort((x, y) => x.s - y.s); }
+  A.s += shiftA; B.s += shiftB;
+  P.markers.sort((x, y) => x.s - y.s);
+  changed(); render(); toast("Sections réordonnées.");
+}
+function delSection(mi, ripple) {
+  const m = P.markers[mi]; if (!m) return;
+  mark();
+  if (ripple) {
+    const a = m.s, b = m.s + m.d, span = m.d;
+    splitAllAt(a); splitAllAt(b);
+    P.tracks.forEach(t => {
+      t.regions = t.regions.filter(r => !(r.s >= a && r.s < b));
+      t.regions.forEach(r => { if (r.s >= b) r.s -= span; });
+      sortRegs(t);
+    });
+    if (P.chords) {
+      P.chords = P.chords.filter(c => !(c.s >= a && c.s < b));
+      P.chords.forEach(c => { if (c.s >= b) c.s -= span; });
+    }
+    P.markers.splice(mi, 1);
+    P.markers.forEach(x => { if (x.s >= b) x.s -= span; });
+    P.bars = Math.max(1, P.bars - Math.round(span / barT()));
+    toast(`Section « ${m.name} » et son contenu supprimés.`);
+  } else {
+    P.markers.splice(mi, 1);
+    toast(`Marqueur « ${m.name} » supprimé.`);
+  }
+  changed(); render();
+}
 
 // ------------------------------------------------------------------ son
 const tBus = new Map();
@@ -2690,7 +2990,7 @@ function sched() {
 function schedRange(a, b, A) {
   P.tracks.forEach(t => {
     if (!audible(t)) return;
-    const ns = t.notes.filter(n => n.s >= a && n.s < b); if (!ns.length) return;
+    const ns = flatNotes(t).filter(n => n.s >= a && n.s < b); if (!ns.length) return;
     // Plusieurs notes ensemble (un accord) : chacune un peu plus douce, comme dans l'atelier.
     const cnt = new Map(); ns.forEach(n => cnt.set(n.s, (cnt.get(n.s) || 0) + 1));
     for (const n of ns) { const k = cnt.get(n.s); noteOn(t, n.p, n.v, timeOf(n.s, A), n.d * spt(), t.kind === "drum" || k < 3 ? null : Math.sqrt(2.5 / k)); }
@@ -2726,11 +3026,12 @@ function midiBytes() {
   const us = Math.round(60000000 / P.bpm);
   const meta = [{ t: 0, o: 0, b: [0xff, 0x03, ...vlq(latin(P.name).length), ...str(latin(P.name))] },
     { t: 0, o: 0, b: [0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255] }, { t: 0, o: 0, b: [0xff, 0x58, 4, P.num || 4, 2, 24, 8] }];
+  (P.markers || []).forEach(m => { const lb = latin(m.name); meta.push({ t: m.s, o: 0, b: [0xff, 0x06, ...vlq(lb.length), ...str(lb)] }); });
   const tracks = [trkData(meta)]; let ch = 0;
   P.tracks.forEach(t => {
     let c = 9; if (t.kind !== "drum") { c = Math.min(15, ch < 9 ? ch : ch + 1); ch++; }
     const nm = latin(t.name), evs = [{ t: 0, o: 0, b: [0xff, 0x03, ...vlq(nm.length), ...str(nm)] }, { t: 0, o: 0, b: [0xb0 | c, 7, Math.min(127, Math.round(t.vol * 1.27))] }];
-    t.notes.forEach(n => { evs.push({ t: n.s, o: 2, b: [0x90 | c, n.p, Math.max(1, n.v)] }); evs.push({ t: n.s + Math.max(1, n.d), o: 1, b: [0x80 | c, n.p, 0] }); });
+    flatNotes(t).forEach(n => { evs.push({ t: n.s, o: 2, b: [0x90 | c, n.p, Math.max(1, n.v)] }); evs.push({ t: n.s + Math.max(1, n.d), o: 1, b: [0x80 | c, n.p, 0] }); });
     tracks.push(trkData(evs));
   });
   out.push(...chunk("MThd", [0, 1, 0, tracks.length, 0, TPQ]));
@@ -2741,8 +3042,9 @@ let expN = 0;
 function exportMidi() {
   const b = midiBytes(); let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode.apply(null, b.subarray(i, i + 8192));
   const fname = "studio-" + (P.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "projet");
-  send("mid|" + (++expN) + "|" + fname + "|" + btoa(s));
-  toast(`✓ ${fname}.mid → Téléchargements`);
+  const b64 = btoa(s); send("mid", fname, b64);
+  const secs = Math.ceil(b64.length / 3500 * 1.1);
+  toast(`⤓ ${fname}.mid → Téléchargements${secs > 3 ? ` (≈ ${secs} s, garde la page ouverte)` : ""} : une notification le confirmera`);
 }
 
 // ------------------------------------------------------------------ harmonie du projet (tonalité, degrés)
@@ -2827,9 +3129,12 @@ const el = id => document.getElementById(id);
 const root = el("studio"), cv = el("stCv"), acv = el("stArrCv");
 let dpr = window.devicePixelRatio || 1;
 const KW = 50, RH = 40, HW = 132, ARH = 40;
+const MH = () => (P && P.markers && P.markers.length ? 22 : 0);
+const rollTop = () => RH + MH();
+const arrTop = () => ARH + MH();
 const VLH = () => st.velLane ? 58 : 0;
 const rowH = () => trk() && trk().kind === "drum" ? Math.max(st.rh, 26) : st.rh;
-const ATH = () => Math.max(56, Math.min(84, Math.floor((root.clientHeight - 200) / Math.max(3, P.tracks.length))));
+const ATH = () => Math.max(60, Math.min(86, Math.floor((root.clientHeight - 200) / Math.max(3, P.tracks.length))));
 let toastT = null;
 function toast(s) { const t = el("stToast"); t.textContent = s; t.style.display = "block"; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = "none"; }, 2600); }
 
@@ -2857,25 +3162,34 @@ function renderTop() {
 }
 function renderBar() {
   if (!P) return;
-  const t = trk();
+  const t = trk(), r = activeReg(t), mc = (P.markers || []).length;
   if (st.view === "arr") {
     el("stBar").innerHTML = `
       <button class="pill gold" data-a="suite">⇩ Suite…</button>
-      <button class="pill" data-a="durs">⏱ Durée des accords</button>
-      <button class="pill" data-a="melo">🎲 Autre mélodie</button>
+      <button class="pill ${mc ? "on" : ""}" data-a="sections">🏷 Sections${mc ? " (" + mc + ")" : ""}</button>
       <button class="pill on" data-a="roll">✎ Piano roll</button>
+      ${r ? `
+      <button class="pill" data-a="splitReg">✂️ Scinder</button>
+      <button class="pill ${r.rep > 1 ? "gold" : ""}" data-a="loopReg">🔁${r.rep > 1 ? " ×" + r.rep : " Boucler"}</button>
+      <button class="pill" data-a="dupReg">⧉ Clip</button>
+      <button class="pill ${r.mute ? "red" : ""}" data-a="muteReg">${r.mute ? "🔇" : "🔊"} Clip</button>
+      <button class="pill" data-a="clipBox">⋯ ${esc(r.name)}</button>
+      ` : `<button class="pill" data-a="addReg">＋ Clip</button>`}
+      <button class="pill" data-a="durs">⏱ Durée accords</button>
+      <button class="pill" data-a="melo">🎲 Mélodie</button>
       <button class="pill" data-a="addInst">＋ Instrument</button>
       <button class="pill" data-a="addDrum">＋ Batterie</button>
       <button class="pill" data-a="key">Ton : ${esc(keyName())}</button>
       <span class="lbl2">Mesures</span><button class="pill" data-a="bars-">−</button><span class="lbl2">${P.bars}</span><button class="pill" data-a="bars+">+</button>
-      <button class="pill" data-a="dupLoop">⧉ Dupliquer la boucle</button>
-      <button class="pill" data-a="clrLoop">⌫ Vider la boucle (piste)</button>
+      <button class="pill" data-a="dupLoop">⧉ Boucle</button>
+      <button class="pill" data-a="clrLoop">⌫ Vider boucle</button>
       <button class="pill" data-a="azoom-">🔍−</button><button class="pill" data-a="azoom+">🔍＋</button>`;
   } else {
     const g = GRIDS.find(x => x[1] === st.grid) || GRIDS[4];
     el("stBar").innerHTML = `
       <button class="pill" data-a="arr">← Pistes</button>
       <button class="pill on" data-a="pickTrk" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;border-left:4px solid ${t.color}">${esc(t.name)} ▾</button>
+      ${r ? `<button class="pill" data-a="pickReg" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;border-left:3px solid ${regCol(r, t)}">📦 ${esc(r.name)}${r.rep > 1 ? " ×" + r.rep : ""} ▾</button>` : `<button class="pill" data-a="addReg">＋ Clip</button>`}
       <button class="pill" data-a="snd" style="max-width:150px;overflow:hidden;text-overflow:ellipsis">${t.kind === "drum" ? "🥁 " + esc(kitNm(t.kit)) : "🎹 " + esc(soundName(t.snd))}</button>
       <button class="pill ${st.step ? "gold" : ""}" data-a="step">⏺ Pas à pas</button>
       <button class="pill ${st.pencil ? "on" : ""}" data-a="pencil">✏️ Crayon</button>
@@ -2896,6 +3210,7 @@ function renderBar() {
 const kitNm = id => id === "synth" || !KITS[id] ? "Batterie de synthèse" : KITS[id].n;
 function renderHeads() {
   const H = el("stHeads"); root.style.setProperty("--hw", HW + "px");
+  H.style.top = arrTop() + "px";
   if (st.view !== "arr") { H.innerHTML = ""; return; }
   const h = ATH();
   H.innerHTML = `<div id="stHeadsIn" style="position:absolute;left:0;top:0;width:100%;transform:translateY(${-st.ay}px)">` + P.tracks.map((t, i) => `<div class="sth ${i === st.trk ? "on" : ""}" data-ti="${i}" style="top:${i * h}px;height:${h}px">
@@ -2961,57 +3276,104 @@ function rollRows() { const t = trk(); return t.kind === "drum" ? DR.length : 88
 const pOfRow = r => trk().kind === "drum" ? DR[r][0] : 108 - r;
 const rowOfP = p => trk().kind === "drum" ? (DRI[p] ?? -1) : 108 - p;
 const rx = t => KW + (t - st.x0) * st.ppt;
-const ry = p => RH + rowOfP(p) * rowH() - st.y0;
-const gridH = () => cv.height / dpr - RH - VLH();
+const ry = p => rollTop() + rowOfP(p) * rowH() - st.y0;
+const gridH = () => cv.height / dpr - rollTop() - VLH();
 function centerRoll() {
   const t = trk(); if (!t) return;
   if (t.kind === "drum") { st.y0 = 0; return; }
-  let mid = 66; if (t.notes.length) mid = t.notes.reduce((a, n) => a + n.p, 0) / t.notes.length;
-  st.y0 = Math.max(0, (108 - mid) * st.rh - (cv.height / dpr - RH - VLH()) / 2);
+  const R = activeReg(t), ns = R && R.notes.length ? R.notes : flatNotes(t, true);
+  let mid = 66; if (ns.length) mid = ns.reduce((a, n) => a + n.p, 0) / ns.length;
+  st.y0 = Math.max(0, (108 - mid) * st.rh - (cv.height / dpr - rollTop() - VLH()) / 2);
 }
 function clampRoll() {
   const maxY = Math.max(0, rollRows() * rowH() - gridH()); st.y0 = Math.max(0, Math.min(maxY, st.y0 || 0)); st.x0 = Math.max(0, st.x0);
 }
 function drawRoll(pos) {
   clampRoll();
-  const g = cv.getContext("2d"), W = cv.width / dpr, H = cv.height / dpr, t = trk(), rh = rowH(), gh = gridH(), drumT = t.kind === "drum";
+  const g = cv.getContext("2d"), W = cv.width / dpr, H = cv.height / dpr, t = trk(), R = activeReg(t), rh = rowH(), top = rollTop(), gh = gridH(), drumT = t.kind === "drum";
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
   const sc = scalePcs();
   // Rangées
-  g.save(); g.beginPath(); g.rect(KW, RH, W - KW, gh); g.clip();
+  g.save(); g.beginPath(); g.rect(KW, top, W - KW, gh); g.clip();
   const r0 = Math.floor(st.y0 / rh), r1 = Math.min(rollRows() - 1, Math.ceil((st.y0 + gh) / rh));
   for (let r = r0; r <= r1; r++) {
-    const p = pOfRow(r), y = RH + r * rh - st.y0;
+    const p = pOfRow(r), y = top + r * rh - st.y0;
     g.fillStyle = drumT ? (r % 2 ? "#121b2a" : "#16202f") : BLACK.includes(p % 12) ? "#0f1724" : sc.has(p % 12) ? "#1a2638" : "#152030";
     g.fillRect(KW, y, W - KW, rh);
     g.fillStyle = !drumT && p % 12 === 0 ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.04)"; g.fillRect(KW, y + rh - 1, W - KW, 1);
   }
+  // Hors du clip actif : légèrement assombri + bords dorés
+  if (R) {
+    const ra = rx(R.s), rb = rx(R.s + R.d), re = rx(regEnd(R));
+    g.fillStyle = "rgba(0,0,0,.26)";
+    if (ra > KW) g.fillRect(KW, top, Math.min(W, ra) - KW, gh);
+    if (rb < W) g.fillRect(Math.max(KW, rb), top, W - Math.max(KW, rb), gh);
+    if (R.rep > 1 && re > rb) {
+      g.fillStyle = "rgba(245,179,66,.04)";
+      g.fillRect(Math.max(KW, rb), top, Math.min(W, re) - Math.max(KW, rb), gh);
+    }
+  }
   // Boucle
-  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.05)"; g.fillRect(rx(P.loop.a), RH, (P.loop.b - P.loop.a) * st.ppt, gh); }
-  vlines(g, W, RH, gh, st.x0, st.ppt, KW);
+  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.05)"; g.fillRect(rx(P.loop.a), top, (P.loop.b - P.loop.a) * st.ppt, gh); }
+  vlines(g, W, top, gh, st.x0, st.ppt, KW);
   // Fin du morceau
-  const ex = rx(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(ex, RH, W - ex, gh); }
+  const ex = rx(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(ex, top, W - ex, gh); }
   // Notes des autres pistes, en fantôme
   if (st.ghost && !drumT) P.tracks.forEach((o, k) => { if (k === st.trk || o.kind === "drum") return;
     g.fillStyle = "rgba(255,255,255,.10)";
-    o.notes.forEach(n => { const x = rx(n.s), w = n.d * st.ppt; if (x > W || x + w < KW) return; g.fillRect(x, ry(n.p) + 2, Math.max(2, w - 1), rh - 4); }); });
-  // Notes
-  t.notes.forEach(n => {
-    const x = rx(n.s), w = drumT ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(3, n.d * st.ppt - 1), y = ry(n.p);
-    if (x > W || x + w < KW || y > RH + gh || y + rh < RH) return;
-    const on = st.sel.has(n.i);
-    g.globalAlpha = 0.45 + 0.55 * n.v / 127; g.fillStyle = on ? "#f5b342" : t.color;
-    rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.fill(); g.globalAlpha = 1;
-    if (on) { g.strokeStyle = "#fff"; g.lineWidth = 1.5; rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.stroke(); }
-    if (!drumT && w > 30 && rh >= 13) { g.fillStyle = on ? "#1a1205" : "rgba(0,0,0,.65)"; g.font = `600 ${Math.min(11, rh - 4)}px system-ui`; g.fillText(noteName(n.p), x + 4, y + rh / 2 + 4); }
+    flatNotes(o).forEach(n => { const x = rx(n.s), w = n.d * st.ppt; if (x > W || x + w < KW) return; g.fillRect(x, ry(n.p) + 2, Math.max(2, w - 1), rh - 4); }); });
+  // Autres clips de la même piste (contexte, cliquables)
+  t.regions.forEach(o => {
+    if (R && o.id === R.id) return;
+    g.globalAlpha = o.mute ? 0.14 : 0.32; g.fillStyle = regCol(o, t);
+    const rep = Math.max(1, o.rep || 1);
+    for (let k = 0; k < rep; k++) o.notes.forEach(n => {
+      if (n.s >= o.d) return;
+      const x = rx(o.s + k * o.d + n.s), w = drumT ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(3, Math.min(n.d, o.d - n.s) * st.ppt - 1), y = ry(n.p);
+      if (x > W || x + w < KW || y > top + gh || y + rh < top) return;
+      rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.fill();
+    });
+    g.globalAlpha = 1;
   });
+  // Clip actif : répétitions en fantôme + notes éditables + bords
+  if (R) {
+    const col = regCol(R, t);
+    if (R.rep > 1) {
+      g.fillStyle = col; g.globalAlpha = 0.24;
+      for (let k = 1; k < R.rep; k++) {
+        R.notes.forEach(n => {
+          if (n.s >= R.d) return;
+          const x = rx(R.s + k * R.d + n.s), w = drumT ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(3, Math.min(n.d, R.d - n.s) * st.ppt - 1), y = ry(n.p);
+          if (x > W || x + w < KW || y > top + gh || y + rh < top) return;
+          rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.fill();
+        });
+      }
+      g.globalAlpha = 1;
+      g.strokeStyle = "rgba(245,179,66,.4)"; g.setLineDash([4, 4]);
+      for (let k = 1; k <= R.rep; k++) { const lx = rx(R.s + k * R.d); if (lx >= KW && lx <= W) { g.beginPath(); g.moveTo(lx, top); g.lineTo(lx, top + gh); g.stroke(); } }
+      g.setLineDash([]);
+    }
+    const ra = rx(R.s), rb = rx(R.s + R.d);
+    g.fillStyle = "rgba(245,179,66,.55)";
+    if (ra >= KW && ra <= W) g.fillRect(ra, top, 2, gh);
+    if (rb >= KW && rb <= W) g.fillRect(rb - 1, top, 2, gh);
+    R.notes.forEach(n => {
+      const x = rx(R.s + n.s), w = drumT ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(3, n.d * st.ppt - 1), y = ry(n.p);
+      if (x > W || x + w < KW || y > top + gh || y + rh < top) return;
+      const on = st.sel.has(n.i);
+      g.globalAlpha = (R.mute ? 0.35 : 1) * (0.45 + 0.55 * n.v / 127); g.fillStyle = on ? "#f5b342" : col;
+      rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.fill(); g.globalAlpha = 1;
+      if (on) { g.strokeStyle = "#fff"; g.lineWidth = 1.5; rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.stroke(); }
+      if (!drumT && w > 30 && rh >= 13) { g.fillStyle = on ? "#1a1205" : "rgba(0,0,0,.65)"; g.font = `600 ${Math.min(11, rh - 4)}px system-ui`; g.fillText(noteName(n.p), x + 4, y + rh / 2 + 4); }
+    });
+  }
   if (rub) { g.strokeStyle = "#f5b342"; g.setLineDash([4, 3]); g.strokeRect(Math.min(rub.x0, rub.x1), Math.min(rub.y0, rub.y1), Math.abs(rub.x1 - rub.x0), Math.abs(rub.y1 - rub.y0)); g.setLineDash([]); }
   g.restore();
   // Clavier
-  g.save(); g.beginPath(); g.rect(0, RH, KW, gh); g.clip();
-  if (!drumT) { g.fillStyle = "#e8ebef"; g.fillRect(0, RH, KW, gh); }
+  g.save(); g.beginPath(); g.rect(0, top, KW, gh); g.clip();
+  if (!drumT) { g.fillStyle = "#e8ebef"; g.fillRect(0, top, KW, gh); }
   for (let r = r0; r <= r1; r++) {
-    const p = pOfRow(r), y = RH + r * rh - st.y0;
+    const p = pOfRow(r), y = top + r * rh - st.y0;
     if (drumT) { g.fillStyle = r % 2 ? "#1f2b3d" : "#243247"; g.fillRect(0, y, KW, rh); g.fillStyle = "#cfd6df"; g.font = "600 9px system-ui";
       const words = DR[r][2].split(" "); words.forEach((wd, k) => g.fillText(wd, 3, y + rh / 2 + 3 + (k - (words.length - 1) / 2) * 10)); }
     else { const blk = BLACK.includes(p % 12);
@@ -3022,16 +3384,16 @@ function drawRoll(pos) {
       if (p % 12 === 0 && rh >= 9) { g.fillStyle = "#333"; g.font = `700 ${Math.min(10, rh - 2)}px system-ui`; g.fillText(noteName(p), 4, y + rh / 2 + 4); } }
   }
   g.restore();
-  // Règle (mesures, accords, boucle, curseur)
+  // Règle (mesures, accords, boucle, sections, curseur)
   ruler(g, W, KW, st.x0, st.ppt);
   // Vélocités
   if (st.velLane) {
-    const y0 = RH + gh, vh = VLH(); g.fillStyle = "#101826"; g.fillRect(0, y0, W, vh); g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, y0, W, 1);
+    const y0 = top + gh, vh = VLH(); g.fillStyle = "#101826"; g.fillRect(0, y0, W, vh); g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, y0, W, 1);
     g.fillStyle = "#8b97a8"; g.font = "600 10px system-ui"; g.fillText("Vélocité", 4, y0 + 16);
-    t.notes.forEach(n => { const x = rx(n.s); if (x < KW - 2 || x > W) return; const hh = (vh - 8) * n.v / 127;
-      g.fillStyle = st.sel.has(n.i) ? "#f5b342" : t.color; g.fillRect(x, y0 + vh - 3 - hh, 3, hh); g.beginPath(); g.arc(x + 1.5, y0 + vh - 3 - hh, 3, 0, 7); g.fill(); });
+    if (R) R.notes.forEach(n => { const x = rx(R.s + n.s); if (x < KW - 2 || x > W) return; const hh = (vh - 8) * n.v / 127;
+      g.fillStyle = st.sel.has(n.i) ? "#f5b342" : regCol(R, t); g.fillRect(x, y0 + vh - 3 - hh, 3, hh); g.beginPath(); g.arc(x + 1.5, y0 + vh - 3 - hh, 3, 0, 7); g.fill(); });
   }
-  cursorLines(g, rx, RH, H - (st.velLane ? 0 : 0), pos, KW, W);
+  cursorLines(g, rx, top, H, pos, KW, W);
 }
 function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 function vlines(g, W, y, h, x0, ppt, left) {
@@ -3042,8 +3404,8 @@ function vlines(g, W, y, h, x0, ppt, left) {
     if (k % bt === 0) { g.fillStyle = "rgba(255,255,255,.22)"; g.fillRect(x, y, 1, h); } else if (TPQ * ppt >= 6) { g.fillStyle = "rgba(255,255,255,.08)"; g.fillRect(x, y, 1, h); } }
 }
 function ruler(g, W, left, x0, ppt) {
-  const bt = barT(), h = st.view === "roll" ? RH : ARH;
-  g.fillStyle = "#17202e"; g.fillRect(left, 0, W - left, h); g.fillStyle = "#0d1420"; g.fillRect(0, 0, left, h);
+  const bt = barT(), h = st.view === "roll" ? RH : ARH, mh = MH();
+  g.fillStyle = "#17202e"; g.fillRect(left, 0, W - left, h); g.fillStyle = "#0d1420"; g.fillRect(0, 0, left, h + mh);
   if (P.loop.on || P.loop.b > P.loop.a) { const a = left + (P.loop.a - x0) * ppt, w = (P.loop.b - P.loop.a) * ppt;
     g.fillStyle = P.loop.on ? "rgba(245,179,66,.55)" : "rgba(245,179,66,.18)"; g.fillRect(Math.max(left, a), 0, Math.max(0, Math.min(W, a + w) - Math.max(left, a)), 7); }
   g.fillStyle = "#c9d2de"; g.font = "700 11px system-ui";
@@ -3056,6 +3418,22 @@ function ruler(g, W, left, x0, ppt) {
     P.chords.forEach(c => { const x = left + (c.s - x0) * ppt; if (x > W || x + c.d * ppt < left) return;
       if (g.measureText(c.n).width + 6 < c.d * ppt) g.fillText(c.n, Math.max(left + 3, x + 3), cy); }); }
   g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, h - 1, W, 1);
+  // Bande des sections (Marqueurs d'arrangement façon Logic / Cubase)
+  if (mh) {
+    g.fillStyle = "#111a28"; g.fillRect(left, h, W - left, mh);
+    g.fillStyle = "#8b97a8"; g.font = "700 10px system-ui"; g.fillText("Sections", 6, h + 15);
+    g.save(); g.beginPath(); g.rect(left, h, W - left, mh); g.clip();
+    (P.markers || []).forEach(m => {
+      const x = left + (m.s - x0) * ppt, w = m.d * ppt;
+      if (x > W || x + w < left) return;
+      g.fillStyle = m.color + "55"; rr(g, x + 1, h + 2, Math.max(4, w - 2), mh - 4, 4); g.fill();
+      g.fillStyle = m.color; g.fillRect(x + 1, h + 2, 3, mh - 4);
+      if (w > 22) { g.fillStyle = "#fff"; g.font = "700 11px system-ui"; g.save(); g.beginPath(); g.rect(x + 5, h + 2, Math.max(0, w - 8), mh - 4); g.clip();
+        g.fillText(m.name, Math.max(left + 5, x + 7), h + 15); g.restore(); }
+    });
+    g.restore();
+    g.fillStyle = "rgba(255,255,255,.14)"; g.fillRect(0, h + mh - 1, W, 1);
+  }
 }
 function cursorLines(g, X, top, bottom, pos, left, W) {
   const cx = X(st.cur); if (cx >= left && cx <= W) { g.fillStyle = "#4a90d9"; g.fillRect(cx - 1, top - 8, 2, bottom - top + 8); g.beginPath(); g.moveTo(cx - 6, top - 12); g.lineTo(cx + 6, top - 12); g.lineTo(cx, top - 4); g.fill(); }
@@ -3063,55 +3441,99 @@ function cursorLines(g, X, top, bottom, pos, left, W) {
 }
 const ax = t => HW + (t - st.ax0) * st.appt;
 function drawArr(pos) {
-  const g = acv.getContext("2d"), W = acv.width / dpr, H = acv.height / dpr, th = ATH();
+  const g = acv.getContext("2d"), W = acv.width / dpr, H = acv.height / dpr, th = ATH(), top = arrTop();
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
   st.ax0 = Math.max(0, st.ax0);
   const lanesH = P.tracks.length * th;
-  st.ay = Math.max(0, Math.min(Math.max(0, lanesH - (H - ARH) + 10), st.ay));
+  st.ay = Math.max(0, Math.min(Math.max(0, lanesH - (H - top) + 10), st.ay));
   const hin = el("stHeadsIn"); if (hin) hin.style.transform = `translateY(${-st.ay}px)`;
   g.save(); g.translate(0, -st.ay);
-  g.save(); g.beginPath(); g.rect(HW, ARH, W - HW, H - ARH); g.clip();
-  P.tracks.forEach((t, i) => { const y = ARH + i * th; g.fillStyle = i === st.trk ? "#172334" : i % 2 ? "#111a28" : "#131d2c"; g.fillRect(HW, y, W - HW, th); });
-  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.06)"; g.fillRect(ax(P.loop.a), ARH, (P.loop.b - P.loop.a) * st.appt, lanesH); }
-  vlines(g, W, ARH, lanesH, st.ax0, st.appt, HW);
-  const ex = ax(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.4)"; g.fillRect(ex, ARH, W - ex, H - ARH); }
+  g.save(); g.beginPath(); g.rect(HW, top, W - HW, H - top + st.ay); g.clip();
+  P.tracks.forEach((t, i) => { const y = top + i * th; g.fillStyle = i === st.trk ? "#172334" : i % 2 ? "#111a28" : "#131d2c"; g.fillRect(HW, y, W - HW, th); });
+  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.06)"; g.fillRect(ax(P.loop.a), top, (P.loop.b - P.loop.a) * st.appt, lanesH); }
+  vlines(g, W, top, lanesH, st.ax0, st.appt, HW);
+  const ex = ax(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.4)"; g.fillRect(ex, top, W - ex, H - top + st.ay); }
+  // Régions / clips de chaque piste (façon Logic Pro)
   P.tracks.forEach((t, i) => {
-    const y = ARH + i * th, aud = audible(t);
-    // La « région » : du début à la fin du morceau, avec ses notes en miniature.
-    g.globalAlpha = aud ? 1 : 0.35;
-    g.fillStyle = t.color + "33"; rr(g, ax(0) + 1, y + 3, songEnd() * st.appt - 2, th - 6, 6); g.fill();
-    if (!t.notes.length) { g.globalAlpha = 1; return; }
-    let lo = 127, hi = 0; t.notes.forEach(n => { lo = Math.min(lo, n.p); hi = Math.max(hi, n.p); });
-    const span = Math.max(12, hi - lo + 1), ih = th - 12;
-    g.fillStyle = t.color;
-    t.notes.forEach(n => { const x = ax(n.s); if (x > W) return; const w = Math.max(2, n.d * st.appt - 1);
-      const yy = t.kind === "drum" ? y + 6 + (DRI[n.p] ?? 0) * ih / DR.length : y + 6 + (hi - n.p + (span - (hi - lo + 1)) / 2) * ih / span;
-      g.fillRect(x, yy, w, Math.max(2, ih / span - 0.5)); });
-    g.globalAlpha = 1;
+    const y = top + i * th, aud = audible(t), hh = 15, bodyY = y + 3 + hh, bodyH = Math.max(10, th - 6 - hh);
+    t.regions.forEach(r => {
+      const span = regSpan(r), rx0 = ax(r.s), rw = span * st.appt;
+      if (rx0 > W || rx0 + rw < HW) return;
+      const sel = i === st.trk && r.id === st.regId, col = regCol(r, t), rep = Math.max(1, r.rep || 1);
+      g.globalAlpha = (!aud || r.mute) ? 0.30 : 1;
+      // Corps du clip (1re itération) + corps des répétitions légèrement adouci
+      const w1 = r.d * st.appt;
+      g.fillStyle = col + "30"; rr(g, rx0 + 1, y + 3, Math.max(4, w1 - 2), th - 6, 6); g.fill();
+      if (rep > 1) {
+        g.fillStyle = col + "1c"; rr(g, rx0 + w1, y + 3, Math.max(0, rw - w1 - 1), th - 6, 6); g.fill();
+      }
+      // En-tête coloré du clip
+      g.fillStyle = r.mute ? "#495466" : col + (sel ? "ee" : "b5");
+      rr(g, rx0 + 1, y + 3, Math.max(4, rw - 2), hh, 5); g.fill();
+      // Séparateurs d'itérations de boucle (encoches façon Logic)
+      if (rep > 1) {
+        g.strokeStyle = "rgba(255,255,255,.35)"; g.setLineDash([3, 3]);
+        for (let k = 1; k < rep; k++) { const lx = ax(r.s + k * r.d); if (lx >= HW && lx <= W) { g.beginPath(); g.moveTo(lx, y + 4); g.lineTo(lx, y + th - 4); g.stroke(); } }
+        g.setLineDash([]);
+      }
+      // Titre du clip
+      if (rw > 20) {
+        g.save(); g.beginPath(); g.rect(rx0 + 4, y + 3, Math.max(0, rw - 10), hh); g.clip();
+        g.fillStyle = "#0b111b"; g.font = "700 10px system-ui";
+        const lbl = (r.mute ? "🔇 " : "") + r.name + (rep > 1 ? ` 🔁×${rep}` : "");
+        g.fillText(lbl, Math.max(HW + 4, rx0 + 6), y + 14);
+        g.restore();
+      }
+      // Miniatures des notes
+      if (r.notes.length) {
+        let lo = 127, hi = 0; r.notes.forEach(n => { lo = Math.min(lo, n.p); hi = Math.max(hi, n.p); });
+        const nspan = Math.max(12, hi - lo + 1), ih = bodyH - 4;
+        for (let k = 0; k < rep; k++) {
+          g.globalAlpha = (!aud || r.mute) ? 0.25 : (k === 0 ? 0.95 : 0.45);
+          g.fillStyle = col;
+          for (const n of r.notes) {
+            if (n.s >= r.d) continue;
+            const nx = ax(r.s + k * r.d + n.s); if (nx > W) continue;
+            const nw = Math.max(2, Math.min(n.d, r.d - n.s) * st.appt - 0.5); if (nx + nw < HW) continue;
+            const yy = t.kind === "drum" ? bodyY + 2 + (DRI[n.p] ?? 0) * ih / DR.length : bodyY + 2 + (hi - n.p + (nspan - (hi - lo + 1)) / 2) * ih / nspan;
+            g.fillRect(nx, yy, nw, Math.max(2, ih / nspan - 0.5));
+          }
+        }
+      }
+      g.globalAlpha = 1;
+      // Contour de sélection + poignée droite (redimensionnement / boucle)
+      if (sel) {
+        g.strokeStyle = "#fff"; g.lineWidth = 1.6; rr(g, rx0 + 1, y + 3, Math.max(4, rw - 2), th - 6, 6); g.stroke();
+        g.fillStyle = "#f5b342"; g.fillRect(rx0 + rw - 5, y + 8, 3, th - 16);
+      }
+    });
   });
   g.restore(); g.restore();
   ruler(g, W, HW, st.ax0, st.appt);
-  cursorLines(g, ax, ARH, Math.min(H, ARH + lanesH - st.ay), pos, HW, W);
-  if (P.tracks.every(t => !t.notes.length)) { g.fillStyle = "#f5b342"; g.font = "700 14px system-ui"; g.fillText("Pour essayer vite : ⇩ Suite… (accords + basse + batterie + mélodie)", HW + 14, ARH + lanesH - st.ay + 34); }
-  if (!P.tracks.length) { g.fillStyle = "#8b97a8"; g.font = "600 14px system-ui"; g.fillText("Ajoute une piste : ＋ Instrument ou ＋ Batterie", HW + 14, ARH + 40); }
+  cursorLines(g, ax, top, Math.min(H, top + lanesH - st.ay), pos, HW, W);
+  if (P.tracks.every(t => !t.regions.length)) { g.fillStyle = "#f5b342"; g.font = "700 14px system-ui"; g.fillText("Pour essayer vite : ⇩ Suite… (accords + basse + batterie + mélodie)", HW + 14, top + lanesH - st.ay + 34); }
+  if (!P.tracks.length) { g.fillStyle = "#8b97a8"; g.font = "600 14px system-ui"; g.fillText("Ajoute une piste : ＋ Instrument ou ＋ Batterie", HW + 14, top + 40); }
 }
 
 // ------------------------------------------------------------------ gestes : piano roll
 let ptrs = new Map(), gest = null, rub = null, kbDown = null, lastTap = { t: 0, i: null };
 function noteAt(x, y) {
-  const t = trk(), rh = rowH();
-  for (let k = t.notes.length - 1; k >= 0; k--) { const n = t.notes[k], nx = rx(n.s), w = t.kind === "drum" ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(6, n.d * st.ppt), ny = ry(n.p);
-    if (x >= nx - 2 && x <= nx + w + 2 && y >= ny && y < ny + rh) return { n, edge: t.kind !== "drum" && w > 16 && x > nx + w - Math.max(10, Math.min(22, w * 0.3)) }; }
+  const t = trk(), R = activeReg(t), rh = rowH();
+  if (!R) return null;
+  for (let k = R.notes.length - 1; k >= 0; k--) {
+    const n = R.notes[k], nx = rx(R.s + n.s), w = t.kind === "drum" ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(6, n.d * st.ppt), ny = ry(n.p);
+    if (x >= nx - 2 && x <= nx + w + 2 && y >= ny && y < ny + rh) return { n, edge: t.kind !== "drum" && w > 16 && x > nx + w - Math.max(10, Math.min(22, w * 0.3)) };
+  }
   return null;
 }
-const pAtY = y => { const r = Math.floor((y - RH + st.y0) / rowH()); return r >= 0 && r < rollRows() ? pOfRow(r) : null; };
+const pAtY = y => { const r = Math.floor((y - rollTop() + st.y0) / rowH()); return r >= 0 && r < rollRows() ? pOfRow(r) : null; };
 const tAtX = x => st.x0 + (x - KW) / st.ppt;
+function markerAt(tick) { return (P.markers || []).findIndex(m => tick >= m.s && tick < m.s + m.d); }
 cv.addEventListener("pointerdown", e => {
   e.preventDefault(); cv.setPointerCapture(e.pointerId);
-  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, top = rollTop();
   ptrs.set(e.pointerId, { x, y });
   if (ptrs.size === 2) { // zoom à deux doigts
-    if (gest && gest.kind === "move" && gest.moved) { /* garde le déplacement fait */ }
     if (gest && gest.kind === "kb") kbStop();
     const [a, b] = [...ptrs.values()];
     gest = { kind: "pinch", dx: Math.abs(a.x - b.x), dy: Math.abs(a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, ppt: st.ppt, rh: st.rh, x0: st.x0, y0: st.y0 };
@@ -3120,13 +3542,14 @@ cv.addEventListener("pointerdown", e => {
   if (ptrs.size > 2) return;
   const gh = gridH();
   if (y < RH) { gest = { kind: "ruler", x0: x, y0: y, x, moved: false }; return; }
-  if (y > RH + gh) { mark(); gest = { kind: "vel" }; velAt(x, y); return; }
+  if (y < top) { gest = { kind: "marker", x0: x }; return; }
+  if (y > top + gh) { mark(); gest = { kind: "vel" }; velAt(x, y); return; }
   if (x < KW) { const p = pAtY(y); if (p != null) { kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
   const hit = noteAt(x, y);
   if (hit) {
-    const n = hit.n;
+    const n = hit.n, R = activeReg();
     if (!st.sel.has(n.i)) { st.sel.clear(); st.sel.add(n.i); }
-    const sel = trk().notes.filter(m => st.sel.has(m.i));
+    const sel = R.notes.filter(m => st.sel.has(m.i));
     gest = { kind: hit.edge ? "size" : "move", x0: x, y0: y, n, orig: sel.map(m => ({ m, s: m.s, p: m.p, d: m.d })), moved: false, lp: n.p };
     if (!hit.edge) audition(trk(), n.p, n.v, 250);
     draw(); return;
@@ -3136,13 +3559,13 @@ cv.addEventListener("pointerdown", e => {
 });
 cv.addEventListener("pointermove", e => {
   if (!ptrs.has(e.pointerId)) return;
-  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, top = rollTop();
   ptrs.set(e.pointerId, { x, y });
   if (!gest) return;
   if (gest.kind === "pinch" && ptrs.size >= 2) {
     const [a, b] = [...ptrs.values()], dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
     if (gest.dx > 40 && dx > 20) { const tAt = gest.x0 + (gest.cx - KW) / gest.ppt; st.ppt = Math.max(0.05, Math.min(8, gest.ppt * dx / gest.dx)); st.x0 = tAt - (cx - KW) / st.ppt; }
-    if (gest.dy > 40 && dy > 20 && trk().kind !== "drum") { const rAt = (gest.y0 + gest.cy - RH) / gest.rh; st.rh = Math.max(7, Math.min(40, gest.rh * dy / gest.dy)); st.y0 = rAt * st.rh - (cy - RH); }
+    if (gest.dy > 40 && dy > 20 && trk().kind !== "drum") { const rAt = (gest.y0 + gest.cy - top) / gest.rh; st.rh = Math.max(7, Math.min(40, gest.rh * dy / gest.dy)); st.y0 = rAt * st.rh - (cy - top); }
     draw(); return;
   }
   if (gest.kind === "ruler") { gest.x = x; if (Math.abs(x - gest.x0) > 12) gest.moved = true;
@@ -3159,9 +3582,10 @@ cv.addEventListener("pointermove", e => {
   if (gest.kind === "move" || gest.kind === "size") {
     if (!gest.moved && Math.hypot(x - gest.x0, y - gest.y0) < 6) return;
     if (!gest.moved) { gest.moved = true; mark(); }
-    const raw = (x - gest.x0) / st.ppt, o = gest.orig.find(q => q.m === gest.n);
+    const R = activeReg(), raw = (x - gest.x0) / st.ppt, o = gest.orig.find(q => q.m === gest.n);
     if (gest.kind === "move") {
-      const ns = st.grid > 1 ? snapT(o.s + raw) : Math.round(o.s + raw), dt = Math.max(-Math.min(...gest.orig.map(q => q.s)), ns - o.s);
+      const absTarget = st.grid > 1 ? snapT(R.s + o.s + raw) : Math.round(R.s + o.s + raw);
+      const dt = Math.max(-R.s - Math.min(...gest.orig.map(q => q.s)), absTarget - (R.s + o.s));
       let dp = trk().kind === "drum" ? 0 : -Math.round((y - gest.y0) / rowH());
       if (trk().kind === "drum") { const r0 = rowOfP(o.p), r1 = Math.max(0, Math.min(DR.length - 1, r0 + Math.round((y - gest.y0) / rowH())));
         gest.orig.forEach(q => { const rq = Math.max(0, Math.min(DR.length - 1, rowOfP(q.p) + r1 - r0)); q.m.p = DR[rq][0]; q.m.s = q.s + dt; }); }
@@ -3169,7 +3593,7 @@ cv.addEventListener("pointermove", e => {
         gest.orig.forEach(q => { q.m.s = q.s + dt; q.m.p = q.p + dp; }); }
       if (gest.n.p !== gest.lp) { gest.lp = gest.n.p; audition(trk(), gest.n.p, gest.n.v, 200); }
     } else {
-      const g = st.grid > 1 ? st.grid : 1, ne = Math.max(o.s + g, st.grid > 1 ? snapT(o.s + o.d + raw) : Math.round(o.s + o.d + raw)), dd = ne - (o.s + o.d);
+      const g = st.grid > 1 ? st.grid : 1, ne = Math.max(o.s + g, st.grid > 1 ? snapT(R.s + o.s + o.d + raw) - R.s : Math.round(o.s + o.d + raw)), dd = ne - (o.s + o.d);
       gest.orig.forEach(q => { q.m.d = Math.max(g, q.d + dd); });
       st.len = Math.max(12, gest.n.d);
     }
@@ -3182,6 +3606,7 @@ function endPtr(e) {
   if (!gest) return;
   if (gest.kind === "pinch") { if (ptrs.size === 0) gest = null; return; }
   const G = gest; gest = null;
+  if (G.kind === "marker") { const mi = markerAt(tAtX(G.x0)); if (mi >= 0) markerBox(mi); else sectionsBox(); return; }
   if (G.kind === "ruler") { if (!G.moved && G.y0 > 22 && chordTap(tAtX(G.x0))) return;
     if (!G.moved) { st.cur = Math.max(0, snapT(tAtX(G.x0), st.grid > 1 ? st.grid : 1)); stepOps = []; posLbl(); } else storeSoon(); renderTop(); draw(); return; }
   if (G.kind === "vel") { changed(); return; }
@@ -3193,50 +3618,84 @@ function endPtr(e) {
     return;
   }
   if (G.kind === "move" || G.kind === "size") {
-    if (G.moved) { trk().notes.sort((a, b) => a.s - b.s); changed(); return; }
+    const R = activeReg();
+    if (G.moved && R) { growReg(R); R.notes.sort((a, b) => a.s - b.s); changed(); return; }
     // Un toucher sur une note : double toucher = l'effacer.
     const now = performance.now();
-    if (lastTap.i === G.n.i && now - lastTap.t < 380) { mark(); trk().notes = trk().notes.filter(m => m !== G.n); st.sel.delete(G.n.i); lastTap = { t: 0, i: null }; changed(); return; }
+    if (R && lastTap.i === G.n.i && now - lastTap.t < 380) { mark(); R.notes = R.notes.filter(m => m !== G.n); st.sel.delete(G.n.i); lastTap = { t: 0, i: null }; changed(); return; }
     lastTap = { t: now, i: G.n.i }; st.len = G.n.d; st.vel = G.n.v; draw();
   }
 }
 cv.addEventListener("pointerup", endPtr); cv.addEventListener("pointercancel", endPtr);
 function kbStop() { if (gest && gest.vo) { try { gest.vo.stop(); } catch (e) {} } kbDown = null; draw(); }
 function tapEmpty(x, y) {
+  const t = trk(), tick = tAtX(x), R0 = activeReg(t);
+  // Toucher un autre clip de la même piste : basculer dessus !
+  const other = t.regions.find(r => (!R0 || r.id !== R0.id) && tick >= r.s && tick < regEnd(r));
+  if (other && !st.sel.size) { st.regId = other.id; renderBar(); draw(); toast("Clip actif : " + other.name); return; }
   if (st.sel.size) { st.sel.clear(); if (!st.pencil) { draw(); return; } }
   if (!st.pencil) { draw(); return; }
   const p = pAtY(y); if (p == null) return;
-  const t = trk(), g = st.grid > 1 ? st.grid : 1, s = Math.max(0, Math.floor(tAtX(x) / g) * g);
+  const g = st.grid > 1 ? st.grid : 1, absS = Math.max(0, Math.floor(tick / g) * g);
   mark();
-  const n = { p, s, d: t.kind === "drum" ? Math.min(st.len, 24) : st.len, v: st.vel, i: nid++ };
-  t.notes.push(n); t.notes.sort((a, b) => a.s - b.s); st.sel.clear(); st.sel.add(n.i);
+  const R = ensureReg(t, absS);
+  if (absS < R.s) { const bt = barT(), ns = Math.floor(absS / bt) * bt, diff = R.s - ns; R.s = ns; R.d += diff; R.notes.forEach(m => { m.s += diff; }); }
+  const n = { p, s: absS - R.s, d: t.kind === "drum" ? Math.min(st.len, 24) : st.len, v: st.vel, i: nid++ };
+  R.notes.push(n); growReg(R); R.notes.sort((a, b) => a.s - b.s); st.sel.clear(); st.sel.add(n.i);
   audition(t, p, n.v, 300); changed(); renderBar();
 }
 function selRect() {
+  const R = activeReg(); if (!R) return;
   const xa = Math.min(rub.x0, rub.x1), xb = Math.max(rub.x0, rub.x1), ya = Math.min(rub.y0, rub.y1), yb = Math.max(rub.y0, rub.y1);
-  st.sel.clear(); trk().notes.forEach(n => { const nx = rx(n.s), w = n.d * st.ppt, ny = ry(n.p); if (nx < xb && nx + w > xa && ny < yb && ny + rowH() > ya) st.sel.add(n.i); });
+  st.sel.clear(); R.notes.forEach(n => { const nx = rx(R.s + n.s), w = n.d * st.ppt, ny = ry(n.p); if (nx < xb && nx + w > xa && ny < yb && ny + rowH() > ya) st.sel.add(n.i); });
 }
 function velAt(x, y) {
-  const t = trk(), y0 = RH + gridH(), vh = VLH(), v = Math.max(1, Math.min(127, Math.round((y0 + vh - 3 - y) / (vh - 8) * 127)));
-  const near = t.notes.filter(n => Math.abs(rx(n.s) - x) < 9);
+  const R = activeReg(); if (!R) return;
+  const y0 = rollTop() + gridH(), vh = VLH(), v = Math.max(1, Math.min(127, Math.round((y0 + vh - 3 - y) / (vh - 8) * 127)));
+  const near = R.notes.filter(n => Math.abs(rx(R.s + n.s) - x) < 9);
   const tgt = near.some(n => st.sel.has(n.i)) ? near.filter(n => st.sel.has(n.i)) : near;
   tgt.forEach(n => { n.v = v; }); if (tgt.length) st.vel = v; draw();
 }
 
-// ------------------------------------------------------------------ gestes : vue Pistes
+// ------------------------------------------------------------------ gestes : vue Pistes (clips, redim/boucle, sections)
 let ag = null;
+function regHitArr(ti, x, yInRow) {
+  const t = P.tracks[ti]; if (!t) return null;
+  for (let k = t.regions.length - 1; k >= 0; k--) {
+    const r = t.regions[k], x0 = ax(r.s), x1 = ax(regEnd(r));
+    if (x >= x0 - 2 && x <= x1 + 4) {
+      const sel = ti === st.trk && r.id === st.regId;
+      const edge = sel && (x1 - x0) > 22 && x >= x1 - 18;
+      const head = yInRow < 19;
+      return { r, sel, edge, head };
+    }
+  }
+  return null;
+}
 acv.addEventListener("pointerdown", e => {
   e.preventDefault(); acv.setPointerCapture(e.pointerId);
-  const r = acv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const rect = acv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top, top = arrTop();
   ptrs.set(e.pointerId, { x, y });
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; ag = { kind: "pinch", d: Math.abs(a.x - b.x), c: (a.x + b.x) / 2, appt: st.appt, ax0: st.ax0 }; return; }
   if (x < HW) return;
   if (y < ARH) { ag = { kind: "ruler", x0: x, y0: y, moved: false }; return; }
-  ag = { kind: "pan", x0: x, y0: y, sx: st.ax0, sy: st.ay, moved: false, ti: Math.floor((y - ARH + st.ay) / ATH()) };
+  if (y < top) { ag = { kind: "marker", x0: x }; return; }
+  const th = ATH(), ti = Math.floor((y - top + st.ay) / th), yInRow = (y - top + st.ay) - ti * th;
+  const hit = regHitArr(ti, x, yInRow);
+  if (hit && hit.edge) {
+    ag = { kind: "rsize", ti, r: hit.r, x0: x, origD: hit.r.d, origRep: hit.r.rep || 1, moved: false };
+    return;
+  }
+  if (hit && (hit.sel || hit.head)) {
+    ag = { kind: "rmove", ti, origTi: ti, r: hit.r, x0: x, y0: y, origS: hit.r.s, moved: false };
+    return;
+  }
+  ag = { kind: "pan", x0: x, y0: y, sx: st.ax0, sy: st.ay, moved: false, ti, hitReg: hit ? hit.r : null };
 });
 acv.addEventListener("pointermove", e => {
   if (!ptrs.has(e.pointerId)) return;
-  const r = acv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; ptrs.set(e.pointerId, { x, y });
+  const rect = acv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top, top = arrTop();
+  ptrs.set(e.pointerId, { x, y });
   if (!ag) return;
   const atx = X => st.ax0 + (X - HW) / st.appt;
   if (ag.kind === "pinch" && ptrs.size >= 2) { const [a, b] = [...ptrs.values()], d = Math.abs(a.x - b.x), c = (a.x + b.x) / 2;
@@ -3244,6 +3703,33 @@ acv.addEventListener("pointermove", e => {
   if (ag.kind === "ruler") { if (Math.abs(x - ag.x0) > 12) ag.moved = true;
     if (ag.moved) { const bt = barT(), a = Math.min(atx(ag.x0), atx(x)), b = Math.max(atx(ag.x0), atx(x));
       P.loop.a = Math.max(0, Math.floor(a / bt) * bt); P.loop.b = Math.max(P.loop.a + bt, Math.ceil(b / bt) * bt); P.loop.on = true; renderTop(); draw(); } return; }
+  if (ag.kind === "rsize") {
+    if (!ag.moved && Math.abs(x - ag.x0) < 6) return;
+    if (!ag.moved) { ag.moved = true; mark(); }
+    const dt = (x - ag.x0) / st.appt;
+    if (ag.origRep > 1) {
+      const targetSpan = Math.max(ag.r.d, ag.origD * ag.origRep + dt);
+      ag.r.rep = Math.max(1, Math.min(32, Math.round(targetSpan / ag.r.d)));
+    } else {
+      const snap = st.appt < 0.08 ? barT() : TPQ;
+      ag.r.d = Math.max(TPQ, Math.round((ag.origD + dt) / snap) * snap);
+    }
+    draw(); return;
+  }
+  if (ag.kind === "rmove") {
+    if (!ag.moved && Math.hypot(x - ag.x0, y - ag.y0) < 8) return;
+    if (!ag.moved) { ag.moved = true; mark(); st.trk = ag.ti; st.regId = ag.r.id; }
+    const snap = st.appt < 0.08 ? barT() : TPQ;
+    ag.r.s = Math.max(0, Math.round((ag.origS + (x - ag.x0) / st.appt) / snap) * snap);
+    // Déplacement vertical entre pistes de même nature (instrument ↔ instrument, batterie ↔ batterie).
+    const nti = Math.max(0, Math.min(P.tracks.length - 1, Math.floor((y - top + st.ay) / ATH())));
+    if (nti !== ag.ti && P.tracks[nti].kind === P.tracks[ag.ti].kind) {
+      P.tracks[ag.ti].regions = P.tracks[ag.ti].regions.filter(q => q.id !== ag.r.id);
+      P.tracks[nti].regions.push(ag.r); sortRegs(P.tracks[nti]);
+      ag.ti = nti; st.trk = nti; renderHeads();
+    }
+    draw(); return;
+  }
   if (ag.kind === "pan") { if (!ag.moved && Math.hypot(x - ag.x0, y - ag.y0) > 8) { ag.moved = true; st.follow = false; } if (ag.moved) { st.ax0 = ag.sx - (x - ag.x0) / st.appt; st.ay = ag.sy - (y - ag.y0); draw(); } }
 });
 function endA(e) {
@@ -3251,21 +3737,41 @@ function endA(e) {
   if (!ag) return; if (ag.kind === "pinch") { if (!ptrs.size) ag = null; return; }
   const G = ag; ag = null; if (e.type === "pointercancel") return;
   const atx = X => st.ax0 + (X - HW) / st.appt;
+  if (G.kind === "marker") { const mi = markerAt(atx(G.x0)); if (mi >= 0) markerBox(mi); else sectionsBox(); return; }
   if (G.kind === "ruler") { if (!G.moved && G.y0 > 22 && chordTap(atx(G.x0))) return;
     if (!G.moved) { st.cur = Math.max(0, Math.round(atx(G.x0) / TPQ) * TPQ); stepOps = []; } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "rsize" || G.kind === "rmove") {
+    if (G.moved) { sortRegs(P.tracks[G.ti]); changed(); renderBar(); return; }
+    // Tap simple / double-tap sur un clip déjà sélectionné ou son en-tête
+    const ti = G.ti, r = G.r, now = performance.now(), dbl = lastTap.i === "r" + r.id && now - lastTap.t < 380;
+    st.trk = ti; st.regId = r.id; st.cur = Math.max(0, Math.floor(atx(pt.x) / TPQ) * TPQ); stepOps = [];
+    lastTap = { t: now, i: "r" + r.id };
+    if (dbl) { openRoll(true); return; }
+    render(); return;
+  }
   if (G.kind === "pan" && !G.moved) {
     const ti = G.ti; if (ti < 0 || ti >= P.tracks.length) return;
-    const now = performance.now(), dbl = lastTap.i === "a" + ti && now - lastTap.t < 380;
-    st.trk = ti; st.cur = Math.max(0, Math.floor(atx(pt.x) / TPQ) * TPQ); stepOps = [];
+    const now = performance.now();
+    if (G.hitReg) {
+      const r = G.hitReg, dbl = lastTap.i === "r" + r.id && now - lastTap.t < 380;
+      st.trk = ti; st.regId = r.id; st.cur = Math.max(0, Math.floor(atx(pt.x) / TPQ) * TPQ); stepOps = [];
+      lastTap = { t: now, i: "r" + r.id };
+      if (dbl) { openRoll(true); return; }
+      render(); return;
+    }
+    const dbl = lastTap.i === "a" + ti && now - lastTap.t < 380;
+    st.trk = ti; st.regId = P.tracks[ti].regions.find(r => atx(pt.x) >= r.s && atx(pt.x) < regEnd(r))?.id || null;
+    st.cur = Math.max(0, Math.floor(atx(pt.x) / TPQ) * TPQ); stepOps = [];
     lastTap = { t: now, i: "a" + ti };
-    if (dbl) { openRoll(true); return; }
+    if (dbl) { addEmptyReg(); openRoll(true); return; }
     render();
   }
 }
 acv.addEventListener("pointerup", endA); acv.addEventListener("pointercancel", endA);
 function openRoll(atCursor) {
   st.view = "roll"; st.sel.clear(); st.y0 = null; render();
-  if (atCursor) { const w = cv.width / dpr - KW; st.x0 = Math.max(0, st.cur - TPQ); if ((st.x0 - 0) * st.ppt < 0) st.x0 = 0; void w; }
+  const R = activeReg();
+  if (atCursor) { st.x0 = Math.max(0, (R && st.cur < R.s ? R.s : st.cur) - TPQ); }
   centerRoll(); draw();
 }
 
@@ -3274,46 +3780,50 @@ let stepOps = [], held = new Map(), grp = null;
 function stepNote(p, fromKb) {
   const t = trk(), L = stepLen();
   mark();
-  // Un doigt déjà posé sur le clavier (ou « Accord ✋ ») : la note rejoint l'accord, au même endroit.
   let s;
   if (grp && (held.size > 1 || st.chordHold)) { s = grp.s; }
   else { s = st.cur; grp = { s, ids: [] }; stepOps.push({ prev: st.cur, ids: grp.ids, op: grp }); st.cur = s + L; }
-  if (t.kind === "drum" || !t.notes.some(n => n.s === s && n.p === p)) {
-    const n = { p, s, d: t.kind === "drum" ? Math.min(L, 24) : L, v: st.vel, i: nid++ }; t.notes.push(n); grp.ids.push(n.i);
+  const R = ensureReg(t, s);
+  if (s < R.s) { const bt = barT(), ns = Math.floor(s / bt) * bt, diff = R.s - ns; R.s = ns; R.d += diff; R.notes.forEach(m => { m.s += diff; }); }
+  const rel = s - R.s;
+  if (t.kind === "drum" || !R.notes.some(n => n.s === rel && n.p === p)) {
+    const n = { p, s: rel, d: t.kind === "drum" ? Math.min(L, 24) : L, v: st.vel, i: nid++ }; R.notes.push(n); grp.ids.push(n.i);
   }
-  t.notes.sort((a, b) => a.s - b.s);
+  growReg(R); R.notes.sort((a, b) => a.s - b.s);
   showCursor(); changed(); renderTop();
 }
 function stepChord(notes) {
   const t = trk(), L = stepLen(), s = st.cur; mark();
-  const ids = [];
-  notes.forEach(p => { if (!t.notes.some(n => n.s === s && n.p === p)) { const n = { p, s, d: L, v: st.vel, i: nid++ }; t.notes.push(n); ids.push(n.i); } });
+  const R = ensureReg(t, s);
+  if (s < R.s) { const bt = barT(), ns = Math.floor(s / bt) * bt, diff = R.s - ns; R.s = ns; R.d += diff; R.notes.forEach(m => { m.s += diff; }); }
+  const rel = s - R.s, ids = [];
+  notes.forEach(p => { if (!R.notes.some(n => n.s === rel && n.p === p)) { const n = { p, s: rel, d: L, v: st.vel, i: nid++ }; R.notes.push(n); ids.push(n.i); } });
   stepOps.push({ prev: s, ids }); st.cur = s + L; grp = null;
-  t.notes.sort((a, b) => a.s - b.s);
+  growReg(R); R.notes.sort((a, b) => a.s - b.s);
   audio(); ac.resume(); const now = ac.currentTime; notes.forEach(p => noteOn(t, p, st.vel, now, 0.6));
   showCursor(); changed(); renderTop();
 }
 function stepRest() { stepOps.push({ prev: st.cur, ids: [] }); st.cur += stepLen(); grp = null; showCursor(); renderTop(); draw(); }
 function stepBack() {
-  const t = trk(), op = stepOps.pop(); grp = null;
-  if (op) { mark(); const ids = new Set(op.ids); t.notes = t.notes.filter(n => !ids.has(n.i)); st.cur = op.prev; }
-  else { st.cur = Math.max(0, st.cur - stepLen()); const s = st.cur, before = t.notes.length; const keep = t.notes.filter(n => n.s !== s);
-    if (keep.length !== before) { mark(); t.notes = keep; } }
+  const R = activeReg(), op = stepOps.pop(); grp = null;
+  if (op && R) { mark(); const ids = new Set(op.ids); R.notes = R.notes.filter(n => !ids.has(n.i)); st.cur = op.prev; }
+  else if (R) { st.cur = Math.max(0, st.cur - stepLen()); const rel = st.cur - R.s, before = R.notes.length; const keep = R.notes.filter(n => n.s !== rel);
+    if (keep.length !== before) { mark(); R.notes = keep; } }
   showCursor(); changed(); renderTop();
 }
 function stepTie() {
-  const t = trk(), op = stepOps[stepOps.length - 1], L = stepLen(); grp = null;
-  const ids = op ? new Set(op.ids) : new Set(); const tgt = t.notes.filter(n => ids.has(n.i) && n.s + n.d === st.cur);
+  const R = activeReg(), op = stepOps[stepOps.length - 1], L = stepLen(); grp = null;
+  const ids = op ? new Set(op.ids) : new Set(); const tgt = R ? R.notes.filter(n => ids.has(n.i) && R.s + n.s + n.d === st.cur) : [];
   if (!tgt.length) { toast("Rien à lier : pose d'abord une note."); return; }
-  mark(); tgt.forEach(n => { n.d += L; }); stepOps.push({ prev: st.cur, ids: [], tie: tgt.map(n => n.i), L }); st.cur += L; showCursor(); changed(); renderTop();
+  mark(); tgt.forEach(n => { n.d += L; }); growReg(R); stepOps.push({ prev: st.cur, ids: [], tie: tgt.map(n => n.i), L }); st.cur += L; showCursor(); changed(); renderTop();
 }
 function showCursor() {
   if (st.view !== "roll") return;
   const w = cv.width / dpr - KW, x = (st.cur - st.x0) * st.ppt;
   if (x > w * 0.8 || x < 0) st.x0 = Math.max(0, st.cur - w * 0.3 / st.ppt);
-  // Les notes posées doivent rester visibles en hauteur.
-  const t = trk(); if (t.kind !== "drum" && grp && grp.ids.length) { const n = t.notes.find(m => m.i === grp.ids[grp.ids.length - 1]);
-    if (n) { const y = ry(n.p); if (y < RH || y > RH + gridH() - rowH()) st.y0 = (108 - n.p) * rowH() - gridH() / 2; } }
+  const t = trk(), R = activeReg(t);
+  if (t.kind !== "drum" && R && grp && grp.ids.length) { const n = R.notes.find(m => m.i === grp.ids[grp.ids.length - 1]);
+    if (n) { const y = ry(n.p), top = rollTop(); if (y < top || y > top + gridH() - rowH()) st.y0 = (108 - n.p) * rowH() - gridH() / 2; } }
 }
 // Clavier et pads : plusieurs doigts à la fois.
 function kbPointer(box, sel) {
@@ -3335,10 +3845,11 @@ kbPointer(el("stKb"), "[data-p]"); kbPointer(el("stPads"), "[data-p]");
 
 // ------------------------------------------------------------------ édition
 let clip = null;
-const selNotes = () => trk().notes.filter(n => st.sel.has(n.i));
+const selNotes = () => { const R = activeReg(); return R ? R.notes.filter(n => st.sel.has(n.i)) : []; };
 function doQuant() {
-  const ns = st.sel.size ? selNotes() : trk().notes, g = st.grid > 1 ? st.grid : 24; if (!ns.length) return;
-  mark(); ns.forEach(n => { n.s = snapT(n.s, g); if (trk().kind !== "drum") n.d = Math.max(g, snapT(n.d, g)); }); trk().notes.sort((a, b) => a.s - b.s);
+  const R = activeReg(); if (!R) return;
+  const ns = st.sel.size ? selNotes() : R.notes, g = st.grid > 1 ? st.grid : 24; if (!ns.length) return;
+  mark(); ns.forEach(n => { n.s = Math.max(0, snapT(R.s + n.s, g) - R.s); if (trk().kind !== "drum") n.d = Math.max(g, snapT(n.d, g)); }); growReg(R); R.notes.sort((a, b) => a.s - b.s);
   toast(`Quantifié à la grille ${(GRIDS.find(x => x[1] === g) || ["1/16"])[0]} (${ns.length} notes)`); changed();
 }
 function doCopy() { const ns = selNotes(); if (!ns.length) { toast("Sélectionne des notes (toucher, ou appui long puis glisser)."); return; }
@@ -3346,39 +3857,47 @@ function doCopy() { const ns = selNotes(); if (!ns.length) { toast("Sélectionne
   toast(`${ns.length} notes copiées`); }
 function doPaste(at) {
   if (!clip) { toast("Rien à coller : copie d'abord des notes."); return; }
-  const t = trk(); mark(); st.sel.clear(); const s0 = at ?? st.cur;
-  clip.notes.forEach(c => { const n = { ...c, s: c.s + s0, i: nid++ }; t.notes.push(n); st.sel.add(n.i); });
-  t.notes.sort((a, b) => a.s - b.s); st.cur = s0 + Math.ceil(clip.len / barT()) * barT(); changed(); renderTop();
+  const t = trk(), s0 = at ?? st.cur; mark(); st.sel.clear();
+  const R = ensureReg(t, s0);
+  if (s0 < R.s) { const bt = barT(), ns = Math.floor(s0 / bt) * bt, diff = R.s - ns; R.s = ns; R.d += diff; R.notes.forEach(m => { m.s += diff; }); }
+  clip.notes.forEach(c => { const n = { ...c, s: c.s + (s0 - R.s), i: nid++ }; R.notes.push(n); st.sel.add(n.i); });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s); st.cur = s0 + Math.ceil(clip.len / barT()) * barT(); changed(); renderTop();
 }
 function doDup() {
-  const ns = selNotes(); if (!ns.length) { toast("Sélectionne des notes à dupliquer."); return; }
+  const R = activeReg(), ns = selNotes(); if (!R || !ns.length) { toast("Sélectionne des notes à dupliquer."); return; }
   const s0 = Math.min(...ns.map(n => n.s)), e0 = Math.max(...ns.map(n => n.s + n.d)), span = Math.ceil((e0 - s0) / barT()) * barT() || barT();
-  mark(); st.sel.clear(); ns.forEach(c => { const n = { p: c.p, s: c.s + span, d: c.d, v: c.v, i: nid++ }; trk().notes.push(n); st.sel.add(n.i); });
-  trk().notes.sort((a, b) => a.s - b.s); changed();
+  mark(); st.sel.clear(); ns.forEach(c => { const n = { p: c.p, s: c.s + span, d: c.d, v: c.v, i: nid++ }; R.notes.push(n); st.sel.add(n.i); });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s); changed();
 }
-function doDel() { if (!st.sel.size) { toast("Rien de sélectionné (double toucher sur une note pour l'effacer)."); return; }
-  mark(); trk().notes = trk().notes.filter(n => !st.sel.has(n.i)); st.sel.clear(); changed(); }
-function doTr(d) { const ns = st.sel.size ? selNotes() : trk().notes; if (!ns.length) return;
+function doDel() { const R = activeReg(); if (!R || !st.sel.size) { toast("Rien de sélectionné (double toucher sur une note pour l'effacer)."); return; }
+  mark(); R.notes = R.notes.filter(n => !st.sel.has(n.i)); st.sel.clear(); changed(); }
+function doTr(d) { const R = activeReg(); if (!R) return;
+  const ns = st.sel.size ? selNotes() : R.notes; if (!ns.length) return;
   if (ns.some(n => n.p + d < 21 || n.p + d > 108)) { toast("Hors du clavier"); return; }
   mark(); ns.forEach(n => { n.p += d; }); changed(); if (ns.length < 8) { audio(); const now = ac.currentTime; ns.slice(0, 6).forEach(n => noteOn(trk(), n.p, n.v, now, 0.3)); } }
-function doLen(dir) { const ns = selNotes(); const g = st.grid > 1 ? st.grid : 24;
+function doLen(dir) { const R = activeReg(), ns = selNotes(); const g = st.grid > 1 ? st.grid : 24;
   if (!ns.length) { const k = LENS.findIndex(l => l[1] === st.len); st.len = LENS[Math.max(0, Math.min(LENS.length - 1, (k < 0 ? 2 : k) - dir))][1]; toast("Durée des nouvelles notes : " + (LENS.find(l => l[1] === st.len) || [, , ""])[2]); renderStep(); return; }
-  mark(); ns.forEach(n => { n.d = Math.max(g, n.d + dir * g); }); changed(); }
+  mark(); ns.forEach(n => { n.d = Math.max(g, n.d + dir * g); }); if (R) growReg(R); changed(); }
 function doVel(d) { const ns = st.sel.size ? selNotes() : []; if (!ns.length) { st.vel = Math.max(1, Math.min(127, st.vel + d)); toast("Vélocité des nouvelles notes : " + st.vel); return; }
   mark(); ns.forEach(n => { n.v = Math.max(1, Math.min(127, n.v + d)); }); changed(); }
 function dupLoop() {
   const L = P.loop; if (!(L.b > L.a)) { toast("Fais d'abord une boucle : glisse le doigt sur la règle des mesures."); return; }
   const span = L.b - L.a; mark();
-  // Ce qui suit la boucle se décale, comme dans Logic quand on insère des mesures.
-  P.tracks.forEach(t => { const inL = t.notes.filter(n => n.s >= L.a && n.s < L.b);
-    t.notes.forEach(n => { if (n.s >= L.b) n.s += span; });
-    inL.forEach(n => t.notes.push({ ...n, s: n.s + span, i: nid++ })); t.notes.sort((a, b) => a.s - b.s); });
+  splitAllAt(L.a); splitAllAt(L.b);
+  P.tracks.forEach(t => {
+    const inL = t.regions.filter(r => r.s >= L.a && r.s < L.b);
+    t.regions.forEach(r => { if (r.s >= L.b) r.s += span; });
+    inL.forEach(r => t.regions.push({ ...r, id: uid("r"), s: r.s + span, notes: r.notes.map(n => ({ ...n, i: nid++ })) }));
+    sortRegs(t);
+  });
   if (P.chords) { const inC = P.chords.filter(c => c.s >= L.a && c.s < L.b); P.chords.forEach(c => { if (c.s >= L.b) c.s += span; }); inC.forEach(c => P.chords.push({ ...c, s: c.s + span })); P.chords.sort((a, b) => a.s - b.s); }
-  P.bars += span / barT(); L.a += span; L.b += span; toast("Boucle dupliquée : la copie est maintenant la boucle."); changed(); render();
+  if (P.markers) { P.markers.forEach(m => { if (m.s >= L.b) m.s += span; }); }
+  P.bars += Math.ceil(span / barT()); L.a += span; L.b += span; toast("Boucle dupliquée : la copie est maintenant la boucle."); changed(); render();
 }
 function clrLoop() {
-  const L = P.loop, t = trk(); if (!(L.b > L.a)) return; mark(); const before = t.notes.length;
-  t.notes = t.notes.filter(n => !(n.s >= L.a && n.s < L.b)); toast(`${before - t.notes.length} notes effacées sur « ${t.name} »`); changed();
+  const L = P.loop, t = trk(); if (!(L.b > L.a)) return; mark();
+  clearRange(t, L.a, L.b); st.regId = t.regions[0]?.id || null;
+  toast(`Boucle vidée sur « ${t.name} »`); changed(); render();
 }
 
 // ------------------------------------------------------------------ suites → pistes (accords, basse, batterie, mélodie)
@@ -3445,38 +3964,47 @@ function importSuite(o) {
   const su = SUITES[o.si] || null;
   const chs = o.chords || (su ? su.chords : [0, 5, 3, 4].map(k => ({ ...degChords()[k], d: 4 })));
   if (su && o.key && !o.chords) { const m = D.modes.find(x => x.id === su.mode); P.key = { root: su.root, rootL: su.rootL, mode: m ? su.mode : P.key.mode, stack: P.key.stack }; }
-  const s0 = o.s0 ?? Math.floor(st.cur / barT()) * barT();
+  const s0 = o.s0 ?? (o.fromCur ? Math.floor(st.cur / barT()) * barT() : 0);
   let T = s0; const spans = chs.map(c => { const len = o.per && !o.chords ? Math.round(o.per * barT()) : Math.round(c.d * TPQ); const sp2 = { c, s: T, e: T + len }; T += len; return sp2; });
   const end = T;
   mark();
   const seed = o.seed || (Date.now() & 0xffffff);
   const find = (nm, kind, snd) => { let t = P.tracks.find(x => x.name === nm && x.kind === kind); if (!t) { t = mkTrack(nm, kind, snd, P.tracks.length); P.tracks.push(t); } return t; };
-  const cEnd = Math.max(end, o.clearTo || 0);
-  const clear = t => { t.notes = t.notes.filter(n => n.s < s0 || n.s >= cEnd); };
+  // Une nouvelle suite remplace toute celle déjà posée (y compris ses mesures hors de la nouvelle).
+  const old = P.suite && !o.chords ? P.suite : null;
+  const c0 = Math.min(s0, old ? old.s0 : s0), cEnd = Math.max(end, o.clearTo || 0, old ? old.end : 0);
   const pat = o.drums || o.rhy || o.bass ? stylePat(o.style || S.style || "pop") : null;
   const tiles = fn => { for (let b = s0; b < end; b += pat.len) fn(b); };
+  const putReg = (t, nm, ns) => {
+    clearRange(t, c0, cEnd);
+    const r = mkReg(nm, s0, Math.max(barT(), end - s0), ns.map(n => ({ ...n, s: n.s - s0 })).sort((a, b) => a.s - b.s));
+    t.regions.push(r); sortRegs(t); return r;
+  };
+  const sName = su ? su.name : "Suite";
   // Accords : tenus, ou rythmés comme le style choisi.
-  const tc = find("Accords", "inst", S.tPad || "hq:grand"); clear(tc);
+  const tc = find("Accords", "inst", S.tPad || "hq:grand"), cNs = [];
   const cNotes = c => { const ns = chordNotes(c); return o.bass && !(c.v && c.v.length) ? ns.slice(1) : ns; };
   if (o.rhy && pat && !pat.hold) tiles(b => pat.C.forEach(h => { const t0 = b + h.t; if (t0 >= end) return; const sp2 = spans.find(x => t0 >= x.s && t0 < x.e); if (!sp2) return;
-    const d = Math.max(6, Math.min(h.d, sp2.e - t0) - 4); cNotes(sp2.c).forEach(p => tc.notes.push({ p, s: t0, d, v: Math.round(50 + 50 * h.v), i: nid++ })); }));
-  else spans.forEach(x => cNotes(x.c).forEach(p => tc.notes.push({ p, s: x.s, d: x.e - x.s, v: 76, i: nid++ })));
-  if (o.bass) { const tb = find("Basse", "inst", S.tBass || "hq:basseelec"); clear(tb);
+    const d = Math.max(6, Math.min(h.d, sp2.e - t0) - 4); cNotes(sp2.c).forEach(p => cNs.push({ p, s: t0, d, v: Math.round(50 + 50 * h.v), i: nid++ })); }));
+  else spans.forEach(x => cNotes(x.c).forEach(p => cNs.push({ p, s: x.s, d: x.e - x.s, v: 76, i: nid++ })));
+  const rC = putReg(tc, sName, cNs);
+  if (o.bass) { const tb = find("Basse", "inst", S.tBass || "hq:basseelec"), bNs = [];
     const B = pat && pat.B.length ? pat.B : [{ t: 0, d: barT(), v: 0.9, deg: "r" }];
-    // Le motif de basse repart à chaque accord (et à chaque mesure dans un accord long).
     spans.forEach(x => { for (let b = x.s; b < x.e; b += Math.min(pat ? pat.len : barT(), barT() * 4)) B.forEach(h => { const t0 = b + h.t; if (t0 >= x.e) return;
-      tb.notes.push({ p: bassNote(x.c, h.deg || "r"), s: t0, d: Math.max(6, Math.min(h.d, x.e - t0) - 6), v: Math.round(60 + 50 * h.v), i: nid++ }); }); }); }
-  if (o.drums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); t.kit = S.kit || "synth"; P.tracks.push(t); return t; })(); clear(td);
-    tiles(b => pat.hits.forEach(h => { const t0 = b + h.t; if (t0 < end && KIND_GM[h.kind]) td.notes.push({ p: KIND_GM[h.kind], s: t0, d: 24, v: Math.max(1, Math.min(127, Math.round(115 * h.v))), i: nid++ }); })); }
-  if (o.melo) { const tm = find("Mélodie", "inst", S.tSolo || "hq:flute"); clear(tm);
-    genMelody(spans, s0, end, scalePcs(), seed).forEach(n => tm.notes.push({ ...n, i: nid++ })); }
-  P.chords = (P.chords || []).filter(c => c.s < s0 || c.s >= cEnd);
+      bNs.push({ p: bassNote(x.c, h.deg || "r"), s: t0, d: Math.max(6, Math.min(h.d, x.e - t0) - 6), v: Math.round(60 + 50 * h.v), i: nid++ }); }); });
+    putReg(tb, "Basse", bNs); }
+  if (o.drums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); t.kit = S.kit || "synth"; P.tracks.push(t); return t; })(), dNs = [];
+    tiles(b => pat.hits.forEach(h => { const t0 = b + h.t; if (t0 < end && KIND_GM[h.kind]) dNs.push({ p: KIND_GM[h.kind], s: t0, d: 24, v: Math.max(1, Math.min(127, Math.round(115 * h.v))), i: nid++ }); }));
+    putReg(td, (STYLES[o.style || S.style || "pop"] || {}).n || "Batterie", dNs); }
+  if (o.melo) { const tm = find("Mélodie", "inst", S.tSolo || "hq:flute");
+    putReg(tm, "Mélodie", genMelody(spans, s0, end, scalePcs(), seed).map(n => ({ ...n, i: nid++ }))); }
+  P.chords = (P.chords || []).filter(c => c.s < c0 || c.s >= cEnd);
   spans.forEach(x => P.chords.push({ s: x.s, d: x.e - x.s, n: cName(x.c) })); P.chords.sort((a, b) => a.s - b.s);
-  P.tracks.forEach(t => t.notes.sort((a, b) => a.s - b.s));
   if (P.bars * barT() < end) P.bars = Math.ceil(end / barT());
   P.loop = { on: true, a: s0, b: end };
+  st.trk = P.tracks.indexOf(tc); st.regId = rC.id;
   // La suite posée reste dans le projet : ses durées se changent ensuite (Durée des accords), tout se recale.
-  const oo = { ...o }; delete oo.chords; delete oo.s0; delete oo.clearTo; delete oo.seed;
+  const oo = { ...o }; delete oo.fromCur; delete oo.chords; delete oo.s0; delete oo.clearTo; delete oo.seed;
   P.suite = { chords: spans.map(x => ({ ...x.c, d: (x.e - x.s) / TPQ })), o: oo, s0, end, seed };
   if (!o.keepView) { st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.3, (acv.width / dpr - HW - 10) / Math.max(barT(), end)));
   }
@@ -3488,9 +4016,11 @@ function newMelody() {
   const L0 = P.suite; if (!L0) { toast("Pose d'abord une suite (⇩ Suite…)."); return; }
   let T = L0.s0; const L = { s0: L0.s0, end: L0.end, spans: L0.chords.map(c => { const sp2 = { c, s: T, e: T + Math.round(c.d * TPQ) }; T = sp2.e; return sp2; }) };
   const tm = P.tracks.find(x => x.name === "Mélodie" && x.kind === "inst") || (() => { const t = mkTrack("Mélodie", "inst", S.tSolo || "hq:flute", P.tracks.length); P.tracks.push(t); return t; })();
-  mark(); tm.notes = tm.notes.filter(n => n.s < L.s0 || n.s >= L.end);
-  genMelody(L.spans, L.s0, L.end, scalePcs(), (Date.now() * 7) & 0xffffff).forEach(n => tm.notes.push({ ...n, i: nid++ }));
-  tm.notes.sort((a, b) => a.s - b.s); changed(); render(); if (!tp.on) startPlay();
+  mark(); clearRange(tm, L.s0, L.end);
+  const ns = genMelody(L.spans, L.s0, L.end, scalePcs(), (Date.now() * 7) & 0xffffff).map(n => ({ ...n, s: n.s - L.s0, i: nid++ }));
+  const r = mkReg("Mélodie", L.s0, Math.max(barT(), L.end - L.s0), ns);
+  tm.regions.push(r); sortRegs(tm); st.trk = P.tracks.indexOf(tm); st.regId = r.id;
+  changed(); render(); if (!tp.on) startPlay();
 }
 
 // ------------------------------------------------------------------ fenêtres
@@ -3533,7 +4063,9 @@ function suiteBox() {
     <div class="chips">${tg("bass", "Basse")}${tg("drums", "Batterie")}${tg("rhy", "Accords rythmés")}${tg("melo", "Mélodie générée")}${su ? tg("key", "Ton de la suite") : ""}</div>
     <div class="lbl2">Rythme (batterie, basse, accords) : <b style="color:var(--gold)">${esc((STYLES[imp.style] || {}).n || imp.style)}</b></div>
     <div style="display:flex;flex-direction:column;gap:5px;max-height:150px;overflow-y:auto;touch-action:pan-y">${fams.map(f => `<div class="chips"><span class="lbl2">${esc(f)}</span>${Object.entries(STYLES).filter(([, x]) => x.f === f).map(([k, x]) => `<button class="pill ${k === imp.style ? "on" : ""}" data-b="isty" data-v="${k}">${esc(x.n)}</button>`).join("")}</div>`).join("")}</div>
-    <div class="lbl2" style="white-space:normal">Posée à partir de la mesure ${Math.floor(st.cur / barT()) + 1} (curseur bleu). Ce qui était déjà là sur ces mesures est remplacé (↶ pour revenir).</div>
+    <div class="chips"><span class="lbl2">Départ</span><button class="pill ${imp.fromCur ? "" : "on"}" data-b="ifrom" data-v="0">mesure 1</button>
+      <button class="pill ${imp.fromCur ? "on" : ""}" data-b="ifrom" data-v="1">mesure ${Math.floor(st.cur / barT()) + 1} (curseur bleu)</button></div>
+    <div class="lbl2" style="white-space:normal">${P.suite ? "Remplace la suite déjà posée (" + P.suite.chords.length + " accords) et ses pistes Accords, Basse, Batterie, Mélodie sur ces mesures ; " : ""}↶ pour revenir.</div>
     <div class="chips"><button class="pill gold" data-b="impGo">⇩ Poser et écouter</button><button class="pill" data-b="close">Annuler</button></div>`);
 }
 function gridBox() { box(`<h3>Grille (aimant)</h3><div class="chips">${GRIDS.map(([n, v]) => `<button class="pill ${st.grid === v ? "on" : ""}" data-b="grid" data-v="${v}">${n}</button>`).join("")}</div>
@@ -3556,6 +4088,80 @@ function kitBox(i) {
     `<button class="pill" data-b="close">Fermer</button>`);
 }
 function trkPickBox() { box(`<h3>Piste à éditer</h3>${P.tracks.map((t, i) => `<div class="it" style="border-left:4px solid ${t.color}"><span class="g">${esc(t.name)}</span><button class="pill ${i === st.trk ? "on" : ""}" data-b="pickT" data-ti="${i}">${i === st.trk ? "✓" : "Choisir"}</button></div>`).join("")}<button class="pill" data-b="close">Fermer</button>`); }
+function regPickBox() {
+  const t = trk(), R = activeReg(t), bt = barT();
+  box(`<h3>📦 Clips de « ${esc(t.name)} »</h3>
+    ${t.regions.map(r => `<div class="it" style="border-left:4px solid ${regCol(r, t)}"><span class="g">${r.mute ? "🔇 " : ""}${esc(r.name)} <span class="lbl2">m.${Math.floor(r.s / bt) + 1} · ${(r.d / bt).toFixed(1).replace(/\.0$/, "")} mes.${r.rep > 1 ? " ×" + r.rep : ""}</span></span>
+      <button class="pill ${R && R.id === r.id ? "on" : ""}" data-b="pickR" data-id="${r.id}">${R && R.id === r.id ? "✓" : "Ouvrir"}</button></div>`).join("")}
+    <div class="chips"><button class="pill gold" data-b="addRegB">＋ Nouveau clip au curseur</button><button class="pill" data-b="close">Fermer</button></div>`);
+}
+function clipBox() {
+  const t = trk(), r = activeReg(t), bt = barT();
+  if (!r) { addEmptyReg(); return; }
+  const bStart = Math.round(r.s / bt * 10) / 10 + 1, bLen = Math.round(r.d / bt * 10) / 10;
+  const maxRep = Math.max(1, Math.ceil((songEnd() - r.s) / r.d));
+  box(`<h3 style="color:${regCol(r, t)}">📦 Clip · ${esc(r.name)}</h3>
+    <div class="it"><input type="text" id="stRegName" value="${esc(r.name)}"><button class="pill on" data-b="regRen">Renommer</button></div>
+    <div class="chips"><span class="lbl2">Couleur</span><button class="pill ${!r.color ? "on" : ""}" data-b="regCol" data-c="">Piste</button>
+      ${COLORS.map(c => `<button class="pill" data-b="regCol" data-c="${c}" style="background:${c};min-width:30px">${c === r.color ? "✓" : "&nbsp;"}</button>`).join("")}</div>
+    <div class="lbl2">Début : mesure ${bStart} · Durée : ${bLen} mes. · ${r.notes.length} notes</div>
+    <div class="chips"><span class="lbl2">Boucle (répétitions)</span>
+      ${[1, 2, 3, 4, 8].map(n => `<button class="pill ${(r.rep || 1) === n ? "gold" : ""}" data-b="regRep" data-v="${n}">${n === 1 ? "×1 (non)" : "×" + n}</button>`).join("")}
+      ${maxRep > 1 ? `<button class="pill" data-b="regRep" data-v="${maxRep}">Jusqu'à fin (×${maxRep})</button>` : ""}
+      ${r.rep > 1 ? `<button class="pill on" data-b="regFlat">Aplatir en vraies notes</button>` : ""}</div>
+    <div class="chips"><span class="lbl2">Actions</span>
+      <button class="pill" data-b="regSplit">✂️ Scinder au curseur</button>
+      <button class="pill" data-b="regSplitAll">✂️ Scinder toutes les pistes</button>
+      <button class="pill" data-b="regMerge">🔗 Fusionner avec suivant</button>
+      <button class="pill" data-b="regDup">⧉ Dupliquer</button>
+      <button class="pill" data-b="regCopy">Copier clip</button>
+      ${clipReg ? `<button class="pill on" data-b="regPaste">Coller clip au curseur</button>` : ""}
+      <button class="pill ${r.mute ? "red" : ""}" data-b="regMute">${r.mute ? "🔇 Muet (activer)" : "🔊 Muet"}</button></div>
+    ${t.kind === "drum" ? "" : `<div class="chips"><span class="lbl2">Transposer ce clip</span>
+      <button class="pill" data-b="regTr" data-v="-12">−oct</button><button class="pill" data-b="regTr" data-v="-1">−½</button>
+      <button class="pill" data-b="regTr" data-v="1">+½</button><button class="pill" data-b="regTr" data-v="12">+oct</button></div>`}
+    <div class="chips"><button class="pill on" data-b="regRoll">✎ Ouvrir dans le Piano roll</button>
+      <button class="pill red" data-b="regDel">✕ Supprimer ce clip</button><button class="pill" data-b="close">Fermer</button></div>`);
+}
+function sectionsBox() {
+  const bt = barT(), ms = P.markers || [];
+  const nextBar = ms.length ? Math.round((ms[ms.length - 1].s + ms[ms.length - 1].d) / bt) + 1 : 1;
+  box(`<h3>🏷 Sections d'arrangement (façon Logic / Cubase)</h3>
+    <div class="lbl2" style="white-space:normal">Crée la structure du morceau (Intro, Couplet, Refrain, Pont…), puis découpe, boucle, duplique ou réordonne des sections entières.</div>
+    <div class="chips"><span class="lbl2">Ajouter (à m.${nextBar}) :</span>
+      ${SEC_PRESETS.map(([nm, col, bars], i) => `<button class="pill" data-b="addSecP" data-v="${i}" style="border-left:4px solid ${col}">＋ ${nm} (${bars}m)</button>`).join("")}</div>
+    <div class="chips">
+      ${P.loop.on && P.loop.b > P.loop.a ? `<button class="pill gold" data-b="addSecLoop">＋ Section sur la boucle (m.${Math.floor(P.loop.a / bt) + 1}–${Math.ceil(P.loop.b / bt)})</button>` : ""}
+      <button class="pill" data-b="autoSec">✨ Découper en blocs de 8 mes. (A, B, C…)</button>
+      ${ms.length ? `<button class="pill on" data-b="sliceSec">✂️ Découper tous les clips aux sections</button>` : ""}</div>
+    ${ms.length ? ms.map((m, i) => `<div class="it" style="border-left:4px solid ${m.color};flex-wrap:wrap">
+      <span class="g"><b>${esc(m.name)}</b> <span class="lbl2">m.${Math.round(m.s / bt) + 1}–${Math.round((m.s + m.d) / bt)} (${Math.round(m.d / bt)} mes.)</span></span>
+      <button class="pill" data-b="secLoop" data-v="${i}">🔁</button>
+      <button class="pill" data-b="secDup" data-v="${i}">⧉</button>
+      ${i > 0 ? `<button class="pill" data-b="secMv" data-v="${i}" data-d="-1">◀</button>` : ""}
+      ${i + 1 < ms.length ? `<button class="pill" data-b="secMv" data-v="${i}" data-d="1">▶</button>` : ""}
+      <button class="pill" data-b="secEdit" data-v="${i}">✎</button></div>`).join("")
+      : `<div class="lbl2">Aucune section encore. Touche un bouton ci-dessus pour structurer ton morceau.</div>`}
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+function markerBox(mi) {
+  const m = (P.markers || [])[mi]; if (!m) { sectionsBox(); return; }
+  const bt = barT(), b0 = Math.round(m.s / bt) + 1, bl = Math.round(m.d / bt);
+  box(`<h3 style="color:${m.color}">🏷 Section · ${esc(m.name)} (m.${b0} · ${bl} mes.)</h3>
+    <div class="it"><input type="text" id="stSecName" value="${esc(m.name)}"><button class="pill on" data-b="secRen" data-v="${mi}">Renommer</button></div>
+    <div class="chips"><span class="lbl2">Couleur</span>
+      ${COLORS.map(c => `<button class="pill" data-b="secCol" data-v="${mi}" data-c="${c}" style="background:${c};min-width:30px">${c === m.color ? "✓" : "&nbsp;"}</button>`).join("")}</div>
+    <div class="chips"><span class="lbl2">Durée (mesures)</span>
+      ${[2, 4, 8, 12, 16].map(n => `<button class="pill ${bl === n ? "on" : ""}" data-b="secDur" data-v="${mi}" data-d="${n}">${n}</button>`).join("")}</div>
+    <div class="chips">
+      <button class="pill gold" data-b="secLoop" data-v="${mi}">🔁 Boucler cette section</button>
+      <button class="pill" data-b="secDup" data-v="${mi}">⧉ Dupliquer (toutes pistes)</button>
+      ${mi > 0 ? `<button class="pill" data-b="secMv" data-v="${mi}" data-d="-1">◀ Avancer</button>` : ""}
+      ${mi + 1 < P.markers.length ? `<button class="pill" data-b="secMv" data-v="${mi}" data-d="1">▶ Reculer</button>` : ""}
+      <button class="pill" data-b="secDel" data-v="${mi}" data-d="0">Suppr. marqueur</button>
+      <button class="pill red" data-b="secDel" data-v="${mi}" data-d="1">✕ Suppr. section + notes</button></div>
+    <div class="chips"><button class="pill" data-b="sections">← Toutes les sections</button><button class="pill" data-b="close">Fermer</button></div>`);
+}
 // ------------------------------------------------------------------ mixeur (volume, panoramique, réverb, muet, solo)
 function renderMixer() {
   const M = el("stMix"); M.classList.toggle("on", !!st.mix); if (!st.mix) return;
@@ -3578,7 +4184,8 @@ el("stMix").addEventListener("input", e => {
   if (k === "vol") renderHeads();
 });
 // ------------------------------------------------------------------ durée de chaque accord de la suite posée
-const DURS = () => { const n = P.num || 4; return [[1, "1 temps"], [n / 2, "½ mes."], [n * 3 / 4, "¾"], [n, "1 mes."], [n * 1.5, "1½"], [n * 2, "2 mes."]].filter((x, k, a) => Number.isInteger(x[0]) && a.findIndex(y => y[0] === x[0]) === k); };
+// En mesures : ⅛ (une croche en 4/4), ¼ (un temps), ⅜, ½, ¾, 1, 1¼, 1½, 2.
+const DURS = () => { const n = P.num || 4; return [[1 / 8, "⅛"], [1 / 4, "¼"], [3 / 8, "⅜"], [1 / 2, "½"], [3 / 4, "¾"], [1, "1"], [5 / 4, "1¼"], [3 / 2, "1½"], [2, "2"]].map(([f, l]) => [f * n, l]); };
 function relayout() {
   const U = P.suite; importSuite({ ...U.o, chords: U.chords, s0: U.s0, clearTo: U.end, seed: U.seed, keepView: true });
 }
@@ -3587,12 +4194,13 @@ function chordsBox(focus) {
   if (!U) { toast("Pose d'abord une suite (⇩ Suite…) : ses accords se règlent ici."); return; }
   const n = P.num || 4, lab = d => d % n === 0 ? (d / n === 1 ? "1 mes." : d / n + " mes.") : d === n / 2 ? "½ mes." : d + " t.";
   let T = U.s0;
-  const rows = U.chords.map((c, k) => { const bar = Math.floor(T / barT()) + 1, beat = Math.round((T % barT()) / TPQ) + 1; T += Math.round(c.d * TPQ);
-    return `<div class="it" id="stCh${k}" style="flex-wrap:wrap;${k === focus ? "outline:2px solid var(--gold)" : ""}"><span class="g" style="flex:0 0 auto;min-width:118px">${k + 1}. <b style="color:var(--gold)">${esc(cName(c))}</b> <span class="lbl2">m.${bar}${beat > 1 ? "·" + beat : ""}</span></span>
-      ${DURS().map(([d, l]) => `<button class="pill ${c.d === d ? "on" : ""}" data-b="cd" data-k="${k}" data-v="${d}" style="padding:5px 8px">${l}</button>`).join("")}
-      <span class="lbl2">${DURS().some(x => x[0] === c.d) ? "" : lab(c.d)}</span></div>`; }).join("");
+  const rows = U.chords.map((c, k) => { const bar = Math.floor(T / barT()) + 1, bf = (T % barT()) / TPQ, beat = Math.floor(bf) + 1 + (bf % 1 ? "½" : ""); T += Math.round(c.d * TPQ);
+    return `<div class="it" id="stCh${k}" style="flex-wrap:wrap;${k === focus ? "outline:2px solid var(--gold)" : ""}"><span class="g" style="flex:0 0 auto;min-width:118px">${k + 1}. <b style="color:var(--gold)">${esc(cName(c))}</b> <span class="lbl2">m.${bar}${beat !== 1 ? "·" + beat : ""}</span></span>
+      ${DURS().map(([d, l]) => `<button class="pill ${Math.abs(c.d - d) < 1e-6 ? "on" : ""}" data-b="cd" data-k="${k}" data-v="${d}" style="padding:5px 9px;min-width:34px">${l}</button>`).join("")}
+      <span class="lbl2">${DURS().some(x => Math.abs(x[0] - c.d) < 1e-6) ? "" : lab(c.d)}</span></div>`; }).join("");
   box(`<h3>⏱ Durée des accords · ${esc(U.chords.length + " accords, " + Math.round((U.end - U.s0) / barT() * 10) / 10 + " mesures")}</h3>
     <div class="lbl2" style="white-space:normal">Touche une durée : la suite se recale aussitôt (accords, basse, batterie, mélodie ; ↶ pour revenir). Les notes que tu as changées à la main sur ces mesures sont refaites.</div>
+    <div class="lbl2">Durées en mesures (¼ = un temps en 4/4).</div>
     <div class="chips"><span class="lbl2">Tous les accords :</span>${DURS().map(([d, l]) => `<button class="pill" data-b="cdall" data-v="${d}" style="padding:5px 8px">${l}</button>`).join("")}</div>
     ${rows}
     <button class="pill" data-b="close">Fermer</button>`);
@@ -3630,16 +4238,70 @@ el("stBox").addEventListener("click", e => {
   else if (a === "pan") { P.tracks[ti].pan = +b.dataset.v; mixAll(); storeSoon(); trackMenu(ti); }
   else if (a === "trkUp" || a === "trkDn") { const j = ti + (a === "trkUp" ? -1 : 1); if (j < 0 || j >= P.tracks.length) return; const tt = P.tracks; [tt[ti], tt[j]] = [tt[j], tt[ti]]; st.trk = j; storeSoon(); trackMenu(j); render(); }
   else if (a === "trkDup") { mark(); const o = P.tracks[ti], c = { ...JSON.parse(JSON.stringify(o)), id: "t" + Math.random().toString(36).slice(2, 8), name: o.name + " 2", solo: false, color: COLORS[P.tracks.length % COLORS.length] };
-    c.notes = o.notes.map(n => ({ ...n, i: nid++ })); P.tracks.splice(ti + 1, 0, c); st.trk = ti + 1; changed(); closeBox(); render(); }
-  else if (a === "trkClr") { mark(); P.tracks[ti].notes = []; changed(); closeBox(); render(); }
+    c.regions = o.regions.map(r => ({ ...r, id: uid("r"), notes: r.notes.map(n => ({ ...n, i: nid++ })) })); P.tracks.splice(ti + 1, 0, c); st.trk = ti + 1; st.regId = c.regions[0]?.id || null; changed(); closeBox(); render(); }
+  else if (a === "trkClr") { mark(); P.tracks[ti].regions = []; st.regId = null; changed(); closeBox(); render(); }
   else if (a === "trkDel") { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Supprimer pour de bon ?"; return; }
-    mark(); P.tracks.splice(ti, 1); st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1)); if (!P.tracks.length) P.tracks.push(mkTrack("Mélodie", "inst", S.tSolo, 0)); changed(); closeBox(); st.view = "arr"; render(); }
+    mark(); P.tracks.splice(ti, 1); st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1)); if (!P.tracks.length) P.tracks.push(mkTrack("Mélodie", "inst", S.tSolo, 0)); st.regId = P.tracks[st.trk].regions[0]?.id || null; changed(); closeBox(); st.view = "arr"; render(); }
+  else if (a === "pickR") { st.regId = id; st.sel.clear(); closeBox(); render(); centerRoll(); draw(); }
+  else if (a === "addRegB") { closeBox(); addEmptyReg(); }
+  else if (a === "regRen") { const r = activeReg(); if (r) { r.name = el("stRegName").value.trim() || r.name; storeSoon(); clipBox(); render(); } }
+  else if (a === "regCol") { const r = activeReg(); if (r) { r.color = b.dataset.c || ""; storeSoon(); clipBox(); render(); } }
+  else if (a === "regRep") { const r = activeReg(); if (r) { mark(); r.rep = Math.max(1, +b.dataset.v); changed(); clipBox(); render(); } }
+  else if (a === "regFlat") { const r = activeReg(); if (r && r.rep > 1) { mark(); flattenReg(r); changed(); clipBox(); render(); toast("Boucle aplatie en vraies notes."); } }
+  else if (a === "regSplit") { closeBox(); splitAtCur(false); }
+  else if (a === "regSplitAll") { closeBox(); splitAtCur(true); }
+  else if (a === "regMerge") { closeBox(); mergeReg(); }
+  else if (a === "regDup") { closeBox(); dupReg(); }
+  else if (a === "regCopy") { const r = activeReg(); if (r) { clipReg = { kind: trk().kind, r: JSON.parse(JSON.stringify(r)) }; toast(`Clip « ${r.name} » copié.`); clipBox(); } }
+  else if (a === "regPaste") { if (clipReg) { const t = trk(); if (clipReg.kind !== t.kind) { toast("Incompatible (piste instrument / batterie)."); return; }
+    mark(); const bt = barT(), s0 = Math.max(0, Math.floor(st.cur / bt) * bt);
+    const c = { ...JSON.parse(JSON.stringify(clipReg.r)), id: uid("r"), s: s0, notes: clipReg.r.notes.map(n => ({ ...n, i: nid++ })) };
+    t.regions.push(c); sortRegs(t); st.regId = c.id; closeBox(); changed(); render(); toast("Clip collé."); } }
+  else if (a === "regMute") { const r = activeReg(); if (r) { mark(); r.mute = !r.mute; changed(); clipBox(); render(); } }
+  else if (a === "regTr") { const r = activeReg(), d = +b.dataset.v; if (!r || !r.notes.length) return;
+    if (r.notes.some(n => n.p + d < 21 || n.p + d > 108)) { toast("Hors du clavier"); return; }
+    mark(); r.notes.forEach(n => { n.p += d; }); changed(); render(); toast(`Clip transposé (${d > 0 ? "+" : ""}${d})`); }
+  else if (a === "regRoll") { closeBox(); openRoll(true); }
+  else if (a === "regDel") { closeBox(); delReg(); }
+  else if (a === "sections") sectionsBox();
+  else if (a === "addSecP") {
+    const [nm, col, bars] = SEC_PRESETS[+b.dataset.v], bt = barT(), ms = P.markers || [];
+    const s = ms.length ? ms[ms.length - 1].s + ms[ms.length - 1].d : 0;
+    const cnt = ms.filter(x => x.name.startsWith(nm)).length;
+    mark(); ms.push({ id: uid("m"), name: cnt ? `${nm} ${cnt + 1}` : nm, s, d: bars * bt, color: col });
+    P.markers = ms.sort((x, y) => x.s - y.s); changed(); sectionsBox(); render(); }
+  else if (a === "addSecLoop") {
+    const L = P.loop, bt = barT(); if (!(L.b > L.a)) return;
+    mark(); P.markers = P.markers || [];
+    P.markers.push({ id: uid("m"), name: "Section " + (P.markers.length + 1), s: L.a, d: Math.max(bt, L.b - L.a), color: COLORS[P.markers.length % COLORS.length] });
+    P.markers.sort((x, y) => x.s - y.s); changed(); sectionsBox(); render(); }
+  else if (a === "autoSec") {
+    const bt = barT(), tot = Math.max(8, P.bars), step = 8, LBL = "ABCDEFGH";
+    mark(); P.markers = [];
+    for (let k = 0, b0 = 0; b0 < tot; k++, b0 += step) {
+      const len = Math.min(step, tot - b0);
+      P.markers.push({ id: uid("m"), name: "Section " + (LBL[k] || (k + 1)), s: b0 * bt, d: len * bt, color: COLORS[k % COLORS.length] });
+    }
+    changed(); sectionsBox(); render(); toast("Sections A, B, C… créées."); }
+  else if (a === "sliceSec") { closeBox(); sliceAtMarkers(); }
+  else if (a === "secLoop") { const m = (P.markers || [])[+b.dataset.v]; if (!m) return;
+    P.loop = { on: true, a: m.s, b: m.s + m.d }; st.cur = m.s; storeSoon(); closeBox(); render(); if (!tp.on) startPlay(); else startPlay(); }
+  else if (a === "secDup") { closeBox(); dupSection(+b.dataset.v); }
+  else if (a === "secMv") { const mi = +b.dataset.v, d = +b.dataset.d; moveSection(mi, d); sectionsBox(); }
+  else if (a === "secEdit") markerBox(+b.dataset.v);
+  else if (a === "secRen") { const mi = +b.dataset.v, m = P.markers[mi]; if (m) { m.name = el("stSecName").value.trim() || m.name; storeSoon(); markerBox(mi); render(); } }
+  else if (a === "secCol") { const mi = +b.dataset.v, m = P.markers[mi]; if (m) { m.color = b.dataset.c; storeSoon(); markerBox(mi); render(); } }
+  else if (a === "secDur") { const mi = +b.dataset.v, m = P.markers[mi]; if (m) { mark(); m.d = (+b.dataset.d) * barT(); changed(); markerBox(mi); render(); } }
+  else if (a === "secDel") { const mi = +b.dataset.v, rip = b.dataset.d === "1";
+    if (rip && b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Confirmer la suppression ?"; return; }
+    closeBox(); delSection(mi, rip); }
   else if (a === "cd" || a === "cdall") {
     const sc = el("stBoxIn").scrollTop, U = P.suite, v = +b.dataset.v;
     if (a === "cd") U.chords[+b.dataset.k].d = v; else U.chords.forEach(c => { c.d = v; });
     relayout(); chordsBox(a === "cd" ? +b.dataset.k : null); el("stBoxIn").scrollTop = sc; }
   else if (a === "itg") { imp[b.dataset.k] = !imp[b.dataset.k]; suiteBox(); }
   else if (a === "isu") { imp.si = +b.dataset.v; suiteBox(); }
+  else if (a === "ifrom") { imp.fromCur = b.dataset.v === "1"; suiteBox(); }
   else if (a === "iper") { imp.per = +b.dataset.v; suiteBox(); }
   else if (a === "isty") { imp.style = b.dataset.v; const sc = el("stBoxIn").querySelector("[style*=overflow-y]"), y = sc ? sc.scrollTop : 0; suiteBox(); const sc2 = el("stBoxIn").querySelector("[style*=overflow-y]"); if (sc2) sc2.scrollTop = y; }
   else if (a === "impGo") { closeBox(); stopPlay(); importSuite({ ...imp }); startPlay(); }
@@ -3654,7 +4316,7 @@ el("stBox").addEventListener("click", e => {
     if (taps2.length >= 3) { const d = (taps2[taps2.length - 1] - taps2[0]) / (taps2.length - 1); setBpm(60000 / d); el("stTapL").textContent = "♩ = " + P.bpm; } else el("stTapL").textContent = "encore…"; }
   else if (a === "kit") { P.tracks[ti].kit = b.dataset.v; if (b.dataset.v !== "synth") kitLoad(b.dataset.v); storeSoon(); kitBox(ti); render();
     setTimeout(() => { const t = P.tracks[ti]; audio(); const now = ac.currentTime; noteOn(t, 36, 100, now + 0.05, 0.1); noteOn(t, 42, 80, now + 0.3, 0.1); noteOn(t, 38, 100, now + 0.55, 0.1); }, 400); }
-  else if (a === "pickT") { st.trk = ti; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
+  else if (a === "pickT") { st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
 });
 
 // ------------------------------------------------------------------ boutons
@@ -3671,18 +4333,26 @@ root.addEventListener("click", e => {
     case "loop": P.loop.on = !P.loop.on; if (P.loop.on && !(P.loop.b > P.loop.a)) { P.loop.a = 0; P.loop.b = songEnd(); } storeSoon(); renderTop(); draw(); break;
     case "metro": st.metro = !st.metro; renderTop(); break;
     case "mix": st.mix = !st.mix; if (st.mix) st.step = false; render(); break;
+    case "sections": sectionsBox(); break;
+    case "splitReg": splitAtCur(false); break;
+    case "loopReg": { const r = activeReg(); if (!r) break; if ((r.rep || 1) === 1) { mark(); r.rep = 2; changed(); render(); toast("Clip bouclé ×2 (glisse son bord droit ou touche 🔁 pour ajuster)."); } else clipBox(); break; }
+    case "dupReg": dupReg(); break;
+    case "muteReg": { const r = activeReg(); if (!r) break; mark(); r.mute = !r.mute; changed(); render(); break; }
+    case "clipBox": clipBox(); break;
+    case "addReg": addEmptyReg(); break;
+    case "pickReg": regPickBox(); break;
     case "durs": chordsBox(); break;
     case "bpm-": setBpm(P.bpm - 1); break; case "bpm+": setBpm(P.bpm + 1); break; case "bpm": bpmBox(); break;
     case "undo": undo(); render(); break; case "redo": redo(); render(); break;
     case "export": exportMidi(); break;
     case "roll": openRoll(true); break;
     case "arr": st.view = "arr"; render(); break;
-    case "addInst": { mark(); const t = mkTrack("Piste " + (P.tracks.length + 1), "inst", S.tSolo || "hq:grand", P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; changed(); render(); soundFor = "trk"; openSounds("trk"); break; }
-    case "addDrum": { mark(); const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; if (t.kit !== "synth") kitLoad(t.kit); changed(); render(); kitBox(st.trk); break; }
+    case "addInst": { mark(); const t = mkTrack("Piste " + (P.tracks.length + 1), "inst", S.tSolo || "hq:grand", P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; st.regId = null; changed(); render(); soundFor = "trk"; openSounds("trk"); break; }
+    case "addDrum": { mark(); const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; st.regId = null; if (t.kit !== "synth") kitLoad(t.kit); changed(); render(); kitBox(st.trk); break; }
     case "suite": suiteBox(); break;
     case "melo": newMelody(); break;
     case "key": keyBox(); break;
-    case "bars-": { const need = Math.ceil(Math.max(0, ...P.tracks.flatMap(t => t.notes.map(n => n.s + n.d))) / barT()); if (P.bars > Math.max(1, need)) { P.bars--; storeSoon(); renderBar(); draw(); } else toast("Des notes occupent la dernière mesure."); break; }
+    case "bars-": { const need = Math.ceil(Math.max(0, ...P.tracks.flatMap(t => t.regions.map(regEnd)), ...(P.markers || []).map(m => m.s + m.d)) / barT()); if (P.bars > Math.max(1, need)) { P.bars--; storeSoon(); renderBar(); draw(); } else toast("Des clips ou sections occupent la dernière mesure."); break; }
     case "bars+": P.bars++; storeSoon(); renderBar(); draw(); break;
     case "dupLoop": dupLoop(); break;
     case "clrLoop": clrLoop(); break;
@@ -3690,7 +4360,7 @@ root.addEventListener("click", e => {
     case "zoom-": st.ppt = Math.max(0.05, st.ppt / 1.4); draw(); break; case "zoom+": st.ppt = Math.min(8, st.ppt * 1.4); draw(); break;
     case "vzoom-": st.rh = Math.max(7, st.rh - 3); draw(); break; case "vzoom+": st.rh = Math.min(40, st.rh + 3); draw(); break;
     case "trkMenu": trackMenu(ti); break;
-    case "sndT": st.trk = ti; if (P.tracks[ti].kind === "drum") kitBox(ti); else { soundFor = "trk"; openSounds("trk"); } renderHeads(); break;
+    case "sndT": st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; if (P.tracks[ti].kind === "drum") kitBox(ti); else { soundFor = "trk"; openSounds("trk"); } renderHeads(); break;
     case "snd": if (trk().kind === "drum") kitBox(st.trk); else { soundFor = "trk"; openSounds("trk"); } break;
     case "mute": P.tracks[ti].mute = !P.tracks[ti].mute; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
     case "solo": P.tracks[ti].solo = !P.tracks[ti].solo; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
@@ -3701,7 +4371,7 @@ root.addEventListener("click", e => {
     case "pencil": st.pencil = !st.pencil; renderBar(); toast(st.pencil ? "Crayon : un toucher dans la grille pose une note." : "Crayon retiré : un toucher dans la grille ne pose rien."); break;
     case "grid": gridBox(); break;
     case "quant": doQuant(); break;
-    case "selAll": trk().notes.forEach(n => st.sel.add(n.i)); draw(); break;
+    case "selAll": { const R = activeReg(); if (R) R.notes.forEach(n => st.sel.add(n.i)); draw(); break; }
     case "copy": doCopy(); break; case "paste": doPaste(); break; case "dup": doDup(); break; case "del": doDel(); break;
     case "tr-12": doTr(-12); break; case "tr-1": doTr(-1); break; case "tr1": doTr(1); break; case "tr12": doTr(12); break;
     case "len-": doLen(-1); break; case "len+": doLen(1); break;
@@ -3735,7 +4405,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg },
 };
 return api;
 })();
