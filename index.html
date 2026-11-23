@@ -2849,11 +2849,11 @@ function renderBar() {
   const t = trk();
   if (st.view === "arr") {
     el("stBar").innerHTML = `
-      <span class="lbl2">PISTES</span>
+      <button class="pill gold" data-a="suite">⇩ Suite…</button>
+      <button class="pill" data-a="melo">🎲 Autre mélodie</button>
       <button class="pill on" data-a="roll">✎ Piano roll</button>
       <button class="pill" data-a="addInst">＋ Instrument</button>
       <button class="pill" data-a="addDrum">＋ Batterie</button>
-      <button class="pill" data-a="suite">⇩ Accords${SUITE.length ? " de Ma suite" : ""}</button>
       <button class="pill" data-a="key">Ton : ${esc(keyName())}</button>
       <span class="lbl2">Mesures</span><button class="pill" data-a="bars-">−</button><span class="lbl2">${P.bars}</span><button class="pill" data-a="bars+">+</button>
       <button class="pill" data-a="dupLoop">⧉ Dupliquer la boucle</button>
@@ -2909,7 +2909,7 @@ function renderStep() {
     <span class="lbl2">Un doigt tenu = accord : les autres touches se posent au même endroit.</span>`;
   el("stStepC").innerHTML = t.kind === "drum" ? "" : `<span class="lbl2">Accords</span>` +
     degChords().map((c, k) => `<button class="pill" data-a="ich" data-k="d${k}"><b style="color:var(--gold)">${c.lab}</b> ${esc(cName(c))}</button>`).join("") +
-    (SUITE.length ? `<span class="lbl2">Ma suite</span>` + SUITE.map((c, k) => `<button class="pill" data-a="ich" data-k="s${k}">${esc(cName(c))}</button>`).join("") : "");
+    (SUITES[imp.si] ? `<span class="lbl2">${esc(SUITES[imp.si].name)}</span>` + SUITES[imp.si].chords.map((c, k) => `<button class="pill" data-a="ich" data-k="s${k}">${esc(cName(c))}</button>`).join("") : "");
   el("stKb").style.display = t.kind === "drum" ? "none" : "";
   el("stPads").style.display = t.kind === "drum" ? "grid" : "none";
   if (t.kind === "drum") el("stPads").innerHTML = DR.slice().reverse().map(d => `<div data-p="${d[0]}">${d[2]}</div>`).join("");
@@ -3080,6 +3080,7 @@ function drawArr(pos) {
   g.restore(); g.restore();
   ruler(g, W, HW, st.ax0, st.appt);
   cursorLines(g, ax, ARH, Math.min(H, ARH + lanesH - st.ay), pos, HW, W);
+  if (P.tracks.every(t => !t.notes.length)) { g.fillStyle = "#f5b342"; g.font = "700 14px system-ui"; g.fillText("Pour essayer vite : ⇩ Suite… (accords + basse + batterie + mélodie)", HW + 14, ARH + lanesH - st.ay + 34); }
   if (!P.tracks.length) { g.fillStyle = "#8b97a8"; g.font = "600 14px system-ui"; g.fillText("Ajoute une piste : ＋ Instrument ou ＋ Batterie", HW + 14, ARH + 40); }
 }
 
@@ -3366,33 +3367,111 @@ function clrLoop() {
   t.notes = t.notes.filter(n => !(n.s >= L.a && n.s < L.b)); toast(`${before - t.notes.length} notes effacées sur « ${t.name} »`); changed();
 }
 
-// ------------------------------------------------------------------ accords de Ma suite → pistes
-function importSuite(per, withBass, withDrums) {
-  const chs = SUITE.length ? SUITE : degChords().slice(0, 4).map((c, k) => degChords()[[0, 5, 3, 4][k]]);
-  const len = Math.round(per * barT()), s0 = Math.floor(st.cur / barT()) * barT();
+// ------------------------------------------------------------------ suites → pistes (accords, basse, batterie, mélodie)
+// Ma suite et Mes suites de la page Musique arrivent dans l'adresse (#ms=[{name, rootPc, rootL, modeId, prog}]), avec la
+// durée de chaque accord (d, en temps) et le voicing exact des accords importés de Scaler (v).
+const SUITES = (() => {
+  const conv = su => { const rp = (su.rootPc | 0) % 12, rl = (su.rootL | 0) % 7;
+    const chords = (su.prog || []).map(c => { let t = String(c.t || "").replace(/-/g, "_");
+      // Un type inconnu de cette page : l'accord garde sa place (et son voicing exact s'il en a un), nommé comme un accord majeur.
+      if (!D.types[t]) t = "maj";
+      const tones = [...new Set(D.types[t].tones.map(x => x[0] % 12))], inv = c.inv | 0;
+      return { pc: (rp + (c.o | 0) + 1200) % 12, l: (rl + (c.s | 0) + 700) % 7, t, b: inv > 0 && inv < tones.length ? tones[inv] : 0,
+        v: Array.isArray(c.v) && c.v.length ? c.v.map(n => Math.round(n + rp)).filter(n => n > 0 && n < 128) : null, d: Math.max(0.5, +c.d || 4) }; }).filter(Boolean);
+    return { name: su.name || "Suite", root: rp, rootL: rl, mode: su.modeId || "ionian", chords }; };
+  let L = [];
+  try { L = JSON.parse(new URLSearchParams(location.hash.slice(1)).get("ms") || "[]").map(conv).filter(x => x.chords.length); } catch (e) {}
+  if (!L.some(x => x.name === "Ma suite") && SUITE.length) L.unshift({ name: "Ma suite", root: S.root, rootL: S.rootL, mode: S.mode, chords: SUITE.map(c => ({ ...c, d: 4 })) });
+  return L;
+})();
+// Les rythmes de l'atelier (STYLES, y compris ceux de l'arrangeur) : batterie, basse et accords rythmés, en tics.
+function stylePat(id) {
+  const s0 = STYLES[id] || STYLES.pop, s = s0.m ? (s0.secs.A || Object.values(s0.secs)[0]) : s0;
+  const div = s.div || 4, tk = TPQ / div, sw = s.sw && div === 4 ? s.sw * tk : 0, at = k => k * tk + (k % 2 && sw ? sw : 0);
+  const hits = []; (s.evs || []).forEach((lst, k) => (lst || []).forEach(([kind, v]) => hits.push({ t: at(k), kind, v })));
+  // Rythmes simples : un tableau de coups par élément (s.k, s.s, s.h…).
+  if (!s.evs) DRUMS.forEach(d => (s[d] || []).forEach(([k, v]) => hits.push({ t: at(k), kind: d, v })));
+  return { len: s.steps * tk, hits, B: (s.B || []).map(([k, l, v, d]) => ({ t: at(k), d: l * tk, v, deg: d })),
+    C: (s.C || []).map(([k, l, v]) => ({ t: at(k), d: l * tk, v })), hold: !!s.hold || !(s.C || []).length };
+}
+const KIND_GM = Object.fromEntries(DR.map(d => [d[1], d[0]])); KIND_GM.b = 38;
+// Petit générateur de mélodie : notes de l'accord sur les temps forts, mouvements conjoints entre deux, phrases de
+// 4 mesures (la 2e et la 4e reprennent le rythme de la 1re et de la 3e), fin de phrase posée sur une note longue.
+function rng(seed) { let x = seed >>> 0 || 1; return () => { x ^= x << 13; x >>>= 0; x ^= x >> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; }; }
+const RHY = [[0, 8], [0, 4, 8, 12], [0, 6, 8, 12], [0, 4, 6, 8, 12], [0, 2, 4, 8, 12, 14], [0, 6, 12], [4, 8, 10, 12], [0, 3, 6, 8, 12], [2, 4, 8, 11, 12]];
+function genMelody(spans, s0, end, scalePcsSet, seed, lo = 64, hi = 81) {
+  const R = rng(seed), out = [], bt = barT(), b16 = bt / 16, chordAt = T => (spans.find(x => T >= x.s && T < x.e) || spans[spans.length - 1]).c;
+  const pcsOf = c => new Set(D.types[c.t].tones.slice(0, 4).map(x => (c.pc + x[0]) % 12));
+  const motifs = [RHY[Math.floor(R() * RHY.length)], RHY[Math.floor(R() * RHY.length)]];
+  let prev = Math.round((lo + hi) / 2), bar = 0;
+  const near = (from, ok, maxJ) => { let best = null; for (let p = lo; p <= hi; p++) if (ok(p % 12)) { const d = Math.abs(p - from) + (R() * 1.5); if (Math.abs(p - from) <= maxJ && (!best || d < best.d)) best = { p, d }; } return best ? best.p : from; };
+  for (let b0 = s0; b0 < end; b0 += bt, bar++) {
+    const ph = bar % 4, last = ph === 3 || b0 + bt >= end;
+    let rh = ph === 2 && R() < 0.5 ? RHY[Math.floor(R() * RHY.length)] : motifs[ph % 2];
+    if (last) rh = rh.filter(x => x < 8).slice(0, 3).concat(rh.some(x => x < 8) ? [] : [0]);
+    const ons = [...new Set(rh)].sort((a, b) => a - b);
+    ons.forEach((k, j) => {
+      const T = b0 + k * b16; if (T >= end) return;
+      const nextK = j + 1 < ons.length ? ons[j + 1] : 16, c = chordAt(T), cp = pcsOf(c), strong = k % 4 === 0;
+      let p;
+      if (last && j === ons.length - 1) p = near(prev, x => x === c.pc || x === (c.pc + D.types[c.t].tones[1][0]) % 12, 7);
+      else if (strong) p = near(prev, x => cp.has(x), 5);
+      else { const dir = R() < 0.5 ? -1 : 1; p = near(prev + dir * (R() < 0.7 ? 2 : 3), x => scalePcsSet.has(x) || cp.has(x), 2); }
+      if (p === prev && R() < 0.4 && !strong) p = near(prev + 2, x => scalePcsSet.has(x), 2);
+      let d = (nextK - k) * b16; if (last && j === ons.length - 1) d = Math.max(d, (16 - k) * b16);
+      d = Math.min(d, end - T);
+      out.push({ p, s: T, d: Math.max(b16, d - (strong ? 0 : 4)), v: strong ? 92 : 76 + Math.floor(R() * 10) });
+      prev = p;
+    });
+  }
+  return out;
+}
+let lastImp = null;
+function importSuite(o) {
+  // o : { si (suite), per (mesures par accord ; 0 = durées de la suite), bass, drums, style, melo, rhy, key }
+  const su = SUITES[o.si] || null;
+  const chs = su ? su.chords : [0, 5, 3, 4].map(k => ({ ...degChords()[k], d: 4 }));
+  if (su && o.key) { const m = D.modes.find(x => x.id === su.mode); P.key = { root: su.root, rootL: su.rootL, mode: m ? su.mode : P.key.mode, stack: P.key.stack }; }
+  const s0 = Math.floor(st.cur / barT()) * barT();
+  let T = s0; const spans = chs.map(c => { const len = o.per ? Math.round(o.per * barT()) : Math.round(c.d * TPQ); const sp2 = { c, s: T, e: T + len }; T += len; return sp2; });
+  const end = T;
   mark();
-  const find = (nm, kind, snd) => { let t = P.tracks.find(x => x.name === nm); if (!t) { t = mkTrack(nm, kind, snd, P.tracks.length); P.tracks.push(t); } return t; };
-  const tc = find("Accords", "inst", S.tPad || "hq:grand"), end = s0 + chs.length * len;
+  const find = (nm, kind, snd) => { let t = P.tracks.find(x => x.name === nm && x.kind === kind); if (!t) { t = mkTrack(nm, kind, snd, P.tracks.length); P.tracks.push(t); } return t; };
   const clear = t => { t.notes = t.notes.filter(n => n.s < s0 || n.s >= end); };
-  clear(tc);
-  chs.forEach((c, k) => chordNotes(c).forEach(p => tc.notes.push({ p, s: s0 + k * len, d: len, v: 76, i: nid++ })));
-  if (withBass) { const tb = find("Basse", "inst", S.tBass || "hq:basseelec"); clear(tb);
-    chs.forEach((c, k) => { const b = bassNote(c, "r"); tb.notes.push({ p: b, s: s0 + k * len, d: Math.min(len, barT()) - 6, v: 96, i: nid++ });
-      if (len >= barT()) for (let q = barT(); q < len; q += barT()) tb.notes.push({ p: b, s: s0 + k * len + q, d: barT() - 6, v: 90, i: nid++ });
-      if (len >= barT()) tb.notes.push({ p: bassNote(c, "f"), s: s0 + k * len + len - TPQ, d: TPQ - 6, v: 80, i: nid++ }); }); }
-  if (withDrums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); return t; })(); clear(td);
-    for (let b = s0; b < end; b += barT()) for (let q = 0; q < barT(); q += 48) {
-      td.notes.push({ p: 42, s: b + q, d: 24, v: q % TPQ ? 62 : 84, i: nid++ });
-      if (q % (2 * TPQ) === 0) td.notes.push({ p: 36, s: b + q, d: 24, v: 108, i: nid++ });
-      if (q % (2 * TPQ) === TPQ) td.notes.push({ p: 38, s: b + q, d: 24, v: 100, i: nid++ });
-    } }
+  const pat = o.drums || o.rhy || o.bass ? stylePat(o.style || S.style || "pop") : null;
+  const tiles = fn => { for (let b = s0; b < end; b += pat.len) fn(b); };
+  // Accords : tenus, ou rythmés comme le style choisi.
+  const tc = find("Accords", "inst", S.tPad || "hq:grand"); clear(tc);
+  const cNotes = c => { const ns = chordNotes(c); return o.bass && !(c.v && c.v.length) ? ns.slice(1) : ns; };
+  if (o.rhy && pat && !pat.hold) tiles(b => pat.C.forEach(h => { const t0 = b + h.t; if (t0 >= end) return; const sp2 = spans.find(x => t0 >= x.s && t0 < x.e); if (!sp2) return;
+    const d = Math.max(6, Math.min(h.d, sp2.e - t0) - 4); cNotes(sp2.c).forEach(p => tc.notes.push({ p, s: t0, d, v: Math.round(50 + 50 * h.v), i: nid++ })); }));
+  else spans.forEach(x => cNotes(x.c).forEach(p => tc.notes.push({ p, s: x.s, d: x.e - x.s, v: 76, i: nid++ })));
+  if (o.bass) { const tb = find("Basse", "inst", S.tBass || "hq:basseelec"); clear(tb);
+    const B = pat && pat.B.length ? pat.B : [{ t: 0, d: barT(), v: 0.9, deg: "r" }];
+    // Le motif de basse repart à chaque accord (et à chaque mesure dans un accord long).
+    spans.forEach(x => { for (let b = x.s; b < x.e; b += Math.min(pat ? pat.len : barT(), barT() * 4)) B.forEach(h => { const t0 = b + h.t; if (t0 >= x.e) return;
+      tb.notes.push({ p: bassNote(x.c, h.deg || "r"), s: t0, d: Math.max(6, Math.min(h.d, x.e - t0) - 6), v: Math.round(60 + 50 * h.v), i: nid++ }); }); }); }
+  if (o.drums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); t.kit = S.kit || "synth"; P.tracks.push(t); return t; })(); clear(td);
+    tiles(b => pat.hits.forEach(h => { const t0 = b + h.t; if (t0 < end && KIND_GM[h.kind]) td.notes.push({ p: KIND_GM[h.kind], s: t0, d: 24, v: Math.max(1, Math.min(127, Math.round(115 * h.v))), i: nid++ }); })); }
+  if (o.melo) { const tm = find("Mélodie", "inst", S.tSolo || "hq:flute"); clear(tm);
+    const seed = o.seed || (Date.now() & 0xffff); genMelody(spans, s0, end, scalePcs(), seed).forEach(n => tm.notes.push({ ...n, i: nid++ })); }
   P.chords = (P.chords || []).filter(c => c.s < s0 || c.s >= end);
-  chs.forEach((c, k) => P.chords.push({ s: s0 + k * len, d: len, n: cName(c) })); P.chords.sort((a, b) => a.s - b.s);
+  spans.forEach(x => P.chords.push({ s: x.s, d: x.e - x.s, n: cName(x.c) })); P.chords.sort((a, b) => a.s - b.s);
   P.tracks.forEach(t => t.notes.sort((a, b) => a.s - b.s));
   if (P.bars * barT() < end) P.bars = Math.ceil(end / barT());
   P.loop = { on: true, a: s0, b: end };
+  lastImp = { ...o, s0, end, spans };
+  st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.3, (acv.width / dpr - HW - 10) / Math.max(barT(), end)));
   preloadAll(); changed(); render();
-  toast(`${chs.length} accords posés${withBass ? " + basse" : ""}${withDrums ? " + batterie" : ""}`);
+  toast(`${chs.length} accords${o.bass ? " + basse" : ""}${o.drums ? " + batterie" : ""}${o.melo ? " + mélodie" : ""} · ${Math.round((end - s0) / barT())} mesures`);
+}
+// 🎲 : une autre mélodie sur la même suite (piste Mélodie, entre le début et la fin de la suite posée).
+function newMelody() {
+  const L = lastImp; if (!L) { toast("Pose d'abord une suite (⇩ Suite…)."); return; }
+  const tm = P.tracks.find(x => x.name === "Mélodie" && x.kind === "inst") || (() => { const t = mkTrack("Mélodie", "inst", S.tSolo || "hq:flute", P.tracks.length); P.tracks.push(t); return t; })();
+  mark(); tm.notes = tm.notes.filter(n => n.s < L.s0 || n.s >= L.end);
+  genMelody(L.spans, L.s0, L.end, scalePcs(), (Date.now() * 7) & 0xffffff).forEach(n => tm.notes.push({ ...n, i: nid++ }));
+  tm.notes.sort((a, b) => a.s - b.s); changed(); render(); if (!tp.on) startPlay();
 }
 
 // ------------------------------------------------------------------ fenêtres
@@ -3420,13 +3499,23 @@ function trackMenu(i) {
       <button class="pill red" data-b="trkDel" data-ti="${i}">✕ Supprimer</button></div>
     <button class="pill" data-b="close">Fermer</button>`);
 }
+const imp = { si: 0, per: 0, bass: true, drums: true, melo: true, rhy: true, key: true, style: null };
 function suiteBox() {
-  box(`<h3>⇩ ${SUITE.length ? "Ma suite (" + SUITE.length + " accords)" : "Une suite I–vi–IV–V dans le ton"} → pistes</h3>
-    <div class="lbl2" style="white-space:normal">${SUITE.length ? esc(SUITE.map(cName).join(" · ")) : "Pas de « Ma suite » ouverte : une suite d'essai dans le ton du projet."}<br>Posée à partir de la mesure ${Math.floor(st.cur / barT()) + 1} (le curseur bleu), sur la piste « Accords ».</div>
-    <div class="chips"><span class="lbl2">Un accord par</span>
-      <button class="pill" data-b="imp" data-per="0.5">demi-mesure</button><button class="pill on" data-b="imp" data-per="1">mesure</button><button class="pill" data-b="imp" data-per="2">2 mesures</button></div>
-    <div class="chips"><button class="pill on" id="stImpB" data-b="tg">✓ Basse</button><button class="pill" id="stImpD" data-b="tg">Batterie simple</button></div>
-    <button class="pill" data-b="close">Annuler</button>`);
+  if (!imp.style) imp.style = S.style || "pop";
+  const su = SUITES[imp.si], fams = [...new Set(Object.values(STYLES).map(x => x.f))];
+  const tg = (k, l) => `<button class="pill ${imp[k] ? "gold" : ""}" data-b="itg" data-k="${k}">${imp[k] ? "✓ " : ""}${l}</button>`;
+  box(`<h3>⇩ Poser une suite</h3>
+    ${SUITES.length ? `<div class="lbl2">Ma suite et Mes suites (page Musique)</div><div class="chips">${SUITES.map((x, k) => `<button class="pill ${k === imp.si ? "on" : ""}" data-b="isu" data-v="${k}">${esc(x.name)} · ${x.chords.length}</button>`).join("")}</div>`
+      : `<div class="lbl2" style="white-space:normal">Aucune suite reçue de la page Musique : une suite d'essai I–vi–IV–V dans le ton du projet.</div>`}
+    ${su ? `<div class="lbl2" style="white-space:normal;max-height:66px;overflow:hidden">${esc(su.chords.map(cName).join(" · "))}</div>` : ""}
+    <div class="chips"><span class="lbl2">Durée des accords</span>
+      <button class="pill ${imp.per === 0 ? "on" : ""}" data-b="iper" data-v="0">celles de la suite</button><button class="pill ${imp.per === 0.5 ? "on" : ""}" data-b="iper" data-v="0.5">½ mesure</button>
+      <button class="pill ${imp.per === 1 ? "on" : ""}" data-b="iper" data-v="1">1 mesure</button><button class="pill ${imp.per === 2 ? "on" : ""}" data-b="iper" data-v="2">2 mesures</button></div>
+    <div class="chips">${tg("bass", "Basse")}${tg("drums", "Batterie")}${tg("rhy", "Accords rythmés")}${tg("melo", "Mélodie générée")}${su ? tg("key", "Ton de la suite") : ""}</div>
+    <div class="lbl2">Rythme (batterie, basse, accords) : <b style="color:var(--gold)">${esc((STYLES[imp.style] || {}).n || imp.style)}</b></div>
+    <div style="display:flex;flex-direction:column;gap:5px;max-height:150px;overflow-y:auto;touch-action:pan-y">${fams.map(f => `<div class="chips"><span class="lbl2">${esc(f)}</span>${Object.entries(STYLES).filter(([, x]) => x.f === f).map(([k, x]) => `<button class="pill ${k === imp.style ? "on" : ""}" data-b="isty" data-v="${k}">${esc(x.n)}</button>`).join("")}</div>`).join("")}</div>
+    <div class="lbl2" style="white-space:normal">Posée à partir de la mesure ${Math.floor(st.cur / barT()) + 1} (curseur bleu). Ce qui était déjà là sur ces mesures est remplacé (↶ pour revenir).</div>
+    <div class="chips"><button class="pill gold" data-b="impGo">⇩ Poser et écouter</button><button class="pill" data-b="close">Annuler</button></div>`);
 }
 function gridBox() { box(`<h3>Grille (aimant)</h3><div class="chips">${GRIDS.map(([n, v]) => `<button class="pill ${st.grid === v ? "on" : ""}" data-b="grid" data-v="${v}">${n}</button>`).join("")}</div>
   <div class="lbl2" style="white-space:normal">Les notes posées, déplacées ou étirées s'aimantent à la grille. « Libre » : au tic près.</div><button class="pill" data-b="close">Fermer</button>`); }
@@ -3478,8 +3567,11 @@ el("stBox").addEventListener("click", e => {
   else if (a === "trkClr") { mark(); P.tracks[ti].notes = []; changed(); closeBox(); render(); }
   else if (a === "trkDel") { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Supprimer pour de bon ?"; return; }
     mark(); P.tracks.splice(ti, 1); st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1)); if (!P.tracks.length) P.tracks.push(mkTrack("Mélodie", "inst", S.tSolo, 0)); changed(); closeBox(); st.view = "arr"; render(); }
-  else if (a === "tg") { b.classList.toggle("on"); b.textContent = (b.classList.contains("on") ? "✓ " : "") + b.textContent.replace(/^✓ /, ""); }
-  else if (a === "imp") { const wb = el("stImpB").classList.contains("on"), wd = el("stImpD").classList.contains("on"); closeBox(); importSuite(+b.dataset.per, wb, wd); }
+  else if (a === "itg") { imp[b.dataset.k] = !imp[b.dataset.k]; suiteBox(); }
+  else if (a === "isu") { imp.si = +b.dataset.v; suiteBox(); }
+  else if (a === "iper") { imp.per = +b.dataset.v; suiteBox(); }
+  else if (a === "isty") { imp.style = b.dataset.v; const sc = el("stBoxIn").querySelector("[style*=overflow-y]"), y = sc ? sc.scrollTop : 0; suiteBox(); const sc2 = el("stBoxIn").querySelector("[style*=overflow-y]"); if (sc2) sc2.scrollTop = y; }
+  else if (a === "impGo") { closeBox(); stopPlay(); importSuite({ ...imp }); startPlay(); }
   else if (a === "grid") { st.grid = +b.dataset.v; closeBox(); renderBar(); draw(); }
   else if (a === "kroot") { P.key.root = +b.dataset.v; P.key.rootL = keyL[P.key.root]; storeSoon(); keyBox(); render(); }
   else if (a === "kmode") { P.key.mode = b.dataset.v; storeSoon(); keyBox(); render(); }
@@ -3515,6 +3607,7 @@ root.addEventListener("click", e => {
     case "addInst": { mark(); const t = mkTrack("Piste " + (P.tracks.length + 1), "inst", S.tSolo || "hq:grand", P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; changed(); render(); soundFor = "trk"; openSounds("trk"); break; }
     case "addDrum": { mark(); const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; if (t.kit !== "synth") kitLoad(t.kit); changed(); render(); kitBox(st.trk); break; }
     case "suite": suiteBox(); break;
+    case "melo": newMelody(); break;
     case "key": keyBox(); break;
     case "bars-": { const need = Math.ceil(Math.max(0, ...P.tracks.flatMap(t => t.notes.map(n => n.s + n.d))) / barT()); if (P.bars > Math.max(1, need)) { P.bars--; storeSoon(); renderBar(); draw(); } else toast("Des notes occupent la dernière mesure."); break; }
     case "bars+": P.bars++; storeSoon(); renderBar(); draw(); break;
@@ -3551,7 +3644,7 @@ root.addEventListener("click", e => {
     case "curL": st.cur = Math.max(0, st.cur - stepLen()); grp = null; showCursor(); renderTop(); draw(); break;
     case "curR": st.cur += stepLen(); grp = null; showCursor(); renderTop(); draw(); break;
     case "kb-": st.kbOct = Math.max(2, st.kbOct - 1); renderStep(); break; case "kb+": st.kbOct = Math.min(7, st.kbOct + 1); renderStep(); break;
-    case "ich": { const k = b.dataset.k, c = k[0] === "d" ? degChords()[+k.slice(1)] : SUITE[+k.slice(1)]; stepChord(chordNotes(c)); break; }
+    case "ich": { const k = b.dataset.k, c = k[0] === "d" ? degChords()[+k.slice(1)] : SUITES[imp.si].chords[+k.slice(1)]; stepChord(chordNotes(c)); break; }
   }
 });
 
@@ -3569,7 +3662,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
+  test: { SUITES, imp, newMelody, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
 };
 return api;
 })();
