@@ -183,6 +183,7 @@
     <button class="pill" id="sceneBtn"></button>
     <button class="pill" id="mixBtn">🎚 Mix</button>
     <button class="pill" id="cfgBtn2">💾</button>
+    <button class="pill" id="studioBtn" style="background:rgba(245,179,66,.85);color:#1a1205">🎹 Studio</button>
     <!-- Transposition globale : accords, solo, basse et accompagnement, en demi-tons (la batterie n'a pas de hauteur). -->
     <button class="pill" id="trDn">−</button><button class="pill" id="trLbl" style="white-space:nowrap"></button><button class="pill" id="trUp">+</button>
     <span id="combos" class="scroller grow"></span>
@@ -1301,7 +1302,7 @@ function hqPreload(id, want) {
 // Les grands pianos et Rhodes (4 nuances, en stéréo) prennent beaucoup de mémoire une fois décodés : quand on change
 // de son, ceux qui ne servent plus sont libérés (ils restent dans le cache du téléphone : les reprendre est rapide).
 function hqFree() {
-  const used = new Set([S.tSolo, S.tPad, S.tBass].filter(x => x && x.startsWith("hq:")).map(x => HQ[x.slice(3)]));
+  const used = new Set([S.tSolo, S.tPad, S.tBass, ...(window.__studioSounds ? window.__studioSounds() : [])].filter(x => x && x.startsWith("hq:")).map(x => HQ[x.slice(3)]));
   const heavy = I => /pianos de concert|Rhodes/.test(I.f || "");
   const freed = new Set();
   for (const [u, h] of Object.entries(HB)) if (h.I && !h.pend && heavy(h.I) && !used.has(h.I)) { delete HB[u]; freed.add(h.I); }
@@ -2368,13 +2369,13 @@ $("stacks").addEventListener("click", e => { const b = e.target.closest("[data-s
 // Choisir un son : la liste par familles ; un toucher l'essaie (une note ou l'accord) et le garde.
 let soundFor = null;
 // La liste : la banque d'échantillons (3 au choix), puis les vrais instruments par familles, puis les synthés.
-const sndCur = () => soundFor === "solo" ? S.tSolo : soundFor === "bass" ? S.tBass : S.tPad;
+const sndCur = () => soundFor === "trk" ? studio.snd() : soundFor === "solo" ? S.tSolo : soundFor === "bass" ? S.tBass : S.tPad;
 const sndSt = (id, curId) => { const I = id.startsWith("gm:") ? SF[sfKey(S.bank, id.slice(3))] : null;
   return id.startsWith("hq:") ? (id === curId ? hqStatus(id.slice(3)) : "") : I ? (I.state === "load" ? " ⏳" : I.state === "err" ? " ⚠" : "") : ""; };
 function openSounds(which) {
   soundFor = which;
   const curId = sndCur();
-  $("soundTitle").textContent = which === "solo" ? "Son du solo" : which === "bass" ? "Son de la basse" : "Son des accords";
+  $("soundTitle").textContent = which === "trk" ? "Son de la piste (Studio)" : which === "solo" ? "Son du solo" : which === "bass" ? "Son de la basse" : "Son des accords";
   const fams = [...new Set(GM.map(g => g[2]))];
   const hqFams = [...new Set(Object.values(HQ).filter(I => !I.m).map(I => I.f))];
   const sfFams = [...new Set(Object.values(HQ).filter(I => I.m).map(I => I.f))];
@@ -2419,10 +2420,10 @@ $("sounds").addEventListener("click", e => {
   if (b) {
     audio();
     const id = b.dataset.snd;
-    if (soundFor === "solo") S.tSolo = id; else if (soundFor === "bass") S.tBass = id; else S.tPad = id;
+    if (soundFor === "trk") studio.setSnd(id); else if (soundFor === "solo") S.tSolo = id; else if (soundFor === "bass") S.tBass = id; else S.tPad = id;
     save(); hqFree(); preload();
     // Un instrument pas encore chargé : on l'essaie dès qu'il est prêt (en attendant, le synthé de secours).
-    const go = () => soundFor === "solo" ? trySolo() : soundFor === "bass" ? tryBass() : tryChord();
+    const go = () => soundFor === "trk" ? studio.tryIt() : soundFor === "solo" ? trySolo() : soundFor === "bass" ? tryBass() : tryChord();
     go();
     if (id.startsWith("hq:")) { const I = HQ[id.slice(3)]; const w = setInterval(() => { if (I.st.done >= I.st.want) { clearInterval(w); setTimeout(go, 200); } }, 300); setTimeout(() => clearInterval(w), 30000); }
     if (id.startsWith("gm:")) { const I = SF[sfKey(S.bank, id.slice(3))]; if (I && I.state === "load") { const w = setInterval(() => { if (I.state !== "load") { clearInterval(w); if (I.state === "ok") setTimeout(go, 400); } }, 200); } }
@@ -2509,6 +2510,1073 @@ $("start").addEventListener("pointerdown", () => { audio(); ac.resume(); $("star
 for (const id of [S.tSolo, S.tPad]) if (id.startsWith("gm:") && GMI[id.slice(3)]) sfLoad(S.bank, id.slice(3));
 document.addEventListener("visibilitychange", () => { if (document.hidden) { pedOff(); stopChord(); fingers.forEach(f => f.v.stop()); fingers.clear(); } });
 render();
+// ================================================================== STUDIO (un petit séquenceur, façon Logic)
+// Des pistes (instruments de l'atelier, ou batterie), une vue Pistes, un piano roll au doigt, la saisie pas à pas,
+// la lecture en boucle, le métronome et l'export MIDI multipiste. Les projets restent dans le navigateur et sont
+// recopiés côté Linux (titre « daw|{json}» → ~/.local/share/creation-studio.json, rendu dans l'adresse #st=).
+// Tout le son passe par play() / drum() de l'atelier : mêmes instruments, mêmes kits.
+const studio = (() => {
+const TPQ = 96;                                   // tics par noire
+const COLORS = ["#4a90d9", "#f5b342", "#3fb27f", "#e5534b", "#a371f7", "#2bb3c0", "#e07bb5", "#9aa5b1"];
+const NOTE_FR = ["Do", "Do♯", "Ré", "Mi♭", "Mi", "Fa", "Fa♯", "Sol", "La♭", "La", "Si♭", "Si"];
+const noteName = p => NOTE_FR[p % 12] + (Math.floor(p / 12) - 2);       // 60 = Do3 (usage français)
+const BLACK = [1, 3, 6, 8, 10];
+// La batterie : une rangée par élément (note General MIDI → élément des kits de l'atelier).
+const DR = [[49, "x", "Crash"], [51, "y", "Ride"], [46, "o", "Charley ouvert"], [42, "h", "Charley fermé"], [70, "z", "Shaker"],
+  [56, "w", "Cloche"], [48, "u", "Tom aigu"], [45, "t", "Tom grave"], [39, "c", "Clap"], [37, "r", "Côté caisse"], [38, "s", "Caisse claire"], [36, "k", "Grosse caisse"]];
+const DRI = Object.fromEntries(DR.map((d, i) => [d[0], i]));
+const GRIDS = [["1/1", 384], ["1/2", 192], ["1/4", 96], ["1/8", 48], ["1/16", 24], ["1/32", 12], ["1/8 triolet", 32], ["1/16 triolet", 16], ["Libre", 1]];
+const LENS = [["Ronde", 384, "ronde"], ["Blanche", 192, "blanche"], ["♩ Noire", 96, "noire"], ["♪ Croche", 48, "croche"], ["Double", 24, "double croche"], ["Triple", 12, "triple croche"]];
+const VELS = [["pp", 36], ["p", 56], ["mf", 80], ["f", 102], ["ff", 122]];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ------------------------------------------------------------------ projets
+const LS = "studio1";
+let DB = (() => { try { return JSON.parse(localStorage.getItem(LS) || "null"); } catch (e) { return null; } })() || { cur: null, list: [] };
+let nid = 1;
+const pack = P => ({ ...P, tracks: P.tracks.map(t => ({ ...t, notes: t.notes.map(n => [n.p, n.s, n.d, n.v]) })) });
+const unpack = P => { P.tracks.forEach(t => { t.notes = (t.notes || []).map(n => Array.isArray(n) ? { p: n[0], s: n[1], d: n[2], v: n[3], i: nid++ } : { ...n, i: nid++ }); }); return P; };
+// Projets recopiés côté Linux, rendus par la page Musique dans l'adresse (#st=) : un navigateur vidé les retrouve.
+try {
+  const h = new URLSearchParams(location.hash.slice(1)).get("st");
+  if (h) { const L = JSON.parse(h); (L.list || []).forEach(p => { const k = DB.list.findIndex(x => x.id === p.id);
+    if (k < 0) DB.list.push(p); else if ((p.d || 0) > (DB.list[k].d || 0)) DB.list[k] = p; }); if (!DB.cur) DB.cur = L.cur; }
+} catch (e) {}
+function newProject(name) {
+  const k = { root: S.root, rootL: S.rootL, mode: S.mode, stack: S.stack };
+  return { id: "p" + Date.now().toString(36), name: name || "Projet " + (DB.list.length + 1), bpm: S.bpm || 90, num: 4, bars: 8, key: k,
+    loop: { on: true, a: 0, b: 4 * 4 * TPQ }, chords: [], d: Date.now(),
+    tracks: [mkTrack("Mélodie", "inst", S.tSolo || "hq:grand", 0), mkTrack("Accords", "inst", S.tPad || "hq:grand", 1)] };
+}
+function mkTrack(name, kind, snd, ci) {
+  return { id: "t" + Math.random().toString(36).slice(2, 8), name, kind, snd: kind === "drum" ? null : snd, kit: kind === "drum" ? (S.kit || "synth") : null,
+    vol: 80, pan: 0, mute: false, solo: false, color: COLORS[ci % COLORS.length], notes: [] };
+}
+let P = null;
+function openProject(id) {
+  const raw = DB.list.find(p => p.id === id) || DB.list[0];
+  P = unpack(JSON.parse(JSON.stringify(raw || pack(newProject()))));
+  if (!raw) DB.list.push(pack(P));
+  DB.cur = P.id; undoS = []; redoS = []; stepOps = [];
+  st.trk = Math.min(st.trk, P.tracks.length - 1); if (st.trk < 0) st.trk = 0;
+  st.cur = 0; storeSoon(); preloadAll();
+}
+let storeT = null, mirrorT2 = null;
+function store() {
+  clearTimeout(storeT); storeT = null; if (!P) return;
+  P.d = Date.now();
+  const k = DB.list.findIndex(p => p.id === P.id), pk = pack(P);
+  if (k < 0) DB.list.push(pk); else DB.list[k] = pk;
+  try { localStorage.setItem(LS, JSON.stringify(DB)); } catch (e) {}
+  clearTimeout(mirrorT2); mirrorT2 = setTimeout(() => send("daw|" + JSON.stringify(DB)), 4000);
+}
+const storeSoon = () => { clearTimeout(storeT); storeT = setTimeout(store, 700); };
+// Les messages pour Linux passent par le titre de la page, un à la fois (la page Musique ne lit que le dernier).
+const outQ = []; let outT = null;
+function send(msg) { if (msg.startsWith("daw|")) { const k = outQ.findIndex(m => m.startsWith("daw|")); if (k >= 0) outQ.splice(k, 1); }
+  outQ.push(msg); if (!outT) pump(); }
+function pump() { const m = outQ.shift(); if (!m) { outT = null; return; } try { document.title = m; } catch (e) {} outT = setTimeout(pump, 1600); }
+
+// ------------------------------------------------------------------ annuler / rétablir
+let undoS = [], redoS = [];
+const snap = () => JSON.stringify({ t: pack(P).tracks, c: P.chords, b: P.bars });
+function mark() { undoS.push(snap()); if (undoS.length > 80) undoS.shift(); redoS = []; }
+function restore(s) { const o = JSON.parse(s); P.tracks = unpack({ tracks: o.t }).tracks; P.chords = o.c; P.bars = o.b; st.sel.clear(); stepOps = []; }
+function undo() { if (!undoS.length) return; redoS.push(snap()); restore(undoS.pop()); changed(); }
+function redo() { if (!redoS.length) return; undoS.push(snap()); restore(redoS.pop()); changed(); }
+function changed() { fitBars(); storeSoon(); draw(); renderTop(); }
+
+// ------------------------------------------------------------------ état de l'affichage
+const st = { view: "arr", trk: 0, cur: 0, sel: new Set(), grid: 24, len: 96, dot: false, tri: false, vel: 80, pencil: true, step: false,
+  x0: 0, ppt: 0.9, y0: null, rh: 16, ax0: 0, ay: 0, appt: 0.12, ghost: true, kbOct: 4, follow: true, metro: false, chordHold: false, velLane: true };
+const barT = () => (P.num || 4) * TPQ;
+const songEnd = () => P.bars * barT();
+const trk = () => P.tracks[st.trk];
+function fitBars() {
+  let end = 0; P.tracks.forEach(t => t.notes.forEach(n => { end = Math.max(end, n.s + n.d); }));
+  const need = Math.ceil(end / barT()); if (need > P.bars) P.bars = need;
+}
+const snapT = (t, g = st.grid) => Math.round(t / g) * g;
+const stepLen = () => Math.max(1, Math.round(st.len * (st.dot ? 1.5 : 1) * (st.tri ? 2 / 3 : 1)));
+
+// ------------------------------------------------------------------ son
+const tBus = new Map();
+function busOf(t) {
+  let b = tBus.get(t.id);
+  if (!b) { const g = ac.createGain(), pn = ac.createStereoPanner ? ac.createStereoPanner() : null, sendG = ac.createGain();
+    if (pn) { g.connect(pn); pn.connect(master); } else g.connect(master);
+    sendG.gain.value = 0.5; g.connect(sendG); sendG.connect(revSend);
+    b = { g, pn }; tBus.set(t.id, b); }
+  const aud = audible(t);
+  b.g.gain.value = aud ? Math.pow(t.vol / 100, 2) * (t.kind === "drum" ? 0.55 : 1.1) : 0;
+  if (b.pn) b.pn.pan.value = t.pan || 0;
+  return b.g;
+}
+const audible = t => !t.mute && (!P.tracks.some(x => x.solo) || t.solo);
+function mixAll() { if (ac && P) P.tracks.forEach(busOf); }
+const live = new Set();
+function noteOn(t, p, v, T, dur, gain) {
+  if (t.kind === "drum") {
+    const d = DR[DRI[p]]; if (!d) return;
+    const sb = busDrum, sk = S.kit; busDrum = busOf(t); S.kit = t.kit || "synth";
+    try { drum(d[1], T, v / 127); } finally { busDrum = sb; S.kit = sk; }
+    return;
+  }
+  const vo = play(p, v / 127, t.snd || "hq:grand", busOf(t), false, T, gain);
+  const r = { vo }; live.add(r);
+  r.to = setTimeout(() => { try { vo.stop(); } catch (e) {} live.delete(r); }, Math.max(0, (T + dur - ac.currentTime) * 1000));
+  return r;
+}
+function audition(t, p, v = 90, ms = 350) {
+  audio(); ac.resume();
+  if (t.kind === "drum") { noteOn(t, p, v, ac.currentTime, 0.1); return null; }
+  const vo = play(p, v / 127, t.snd || "hq:grand", busOf(t), false, 0);
+  if (ms) setTimeout(() => { try { vo.stop(); } catch (e) {} }, ms);
+  return vo;
+}
+function allOff() { live.forEach(r => { clearTimeout(r.to); try { r.vo.stop(); } catch (e) {} }); live.clear(); }
+function click(T, acc) {
+  const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = acc ? 1760 : 1175; o.type = "triangle";
+  g.gain.setValueAtTime(0, T); g.gain.linearRampToValueAtTime(acc ? 0.5 : 0.3, T + 0.002); g.gain.exponentialRampToValueAtTime(0.001, T + 0.06);
+  o.connect(g); g.connect(master); o.start(T); o.stop(T + 0.08);
+}
+function preloadAll() {
+  if (!ac || !P) return;
+  P.tracks.forEach(t => {
+    if (t.kind === "drum") { if (t.kit && t.kit !== "synth") kitLoad(t.kit); return; }
+    const id = t.snd || ""; if (id.startsWith("hq:") && HQ[id.slice(3)]) hqPreload(id.slice(3), 0.7);
+    if (id.startsWith("gm:") && GMI[id.slice(3)]) sfLoad(S.bank, id.slice(3));
+  });
+}
+
+// ------------------------------------------------------------------ lecture
+const tp = { on: false, anchors: [], next: 0, timer: null, raf: null };
+const spt = () => 60 / P.bpm / TPQ;
+function anchorAt(time) { let a = tp.anchors[0]; for (const x of tp.anchors) if (x.t0 <= time) a = x; return a; }
+const tickAt = time => { const a = anchorAt(time); return a.p0 + (time - a.t0) / spt(); };
+const timeOf = (tick, a) => a.t0 + (tick - a.p0) * spt();
+function startPlay() {
+  audio(); ac.resume(); mixAll(); preloadAll();
+  if (tp.on) stopPlay(true);
+  const L = P.loop;
+  let from = st.cur; if (L.on && (from >= L.b || from < L.a) && L.b > L.a) from = L.a;
+  tp.on = true; tp.anchors = [{ t0: ac.currentTime + 0.1, p0: from }]; tp.next = from; st.follow = true;
+  tp.timer = setInterval(sched, 25); sched(); tp.raf = requestAnimationFrame(frame); renderTop();
+}
+function stopPlay(keep) {
+  if (!tp.on) return;
+  clearInterval(tp.timer); cancelAnimationFrame(tp.raf); tp.on = false; allOff();
+  if (acc && acc.drq) { const now = ac.currentTime; acc.drq.forEach(x => { if (x.T > now) { try { x.g.gain.cancelScheduledValues(0); x.g.gain.value = 0; } catch (e) {} } }); }
+  if (!keep) { renderTop(); draw(); }
+}
+function sched() {
+  const ahead = ac.currentTime + 0.15, L = P.loop, loopOn = L.on && L.b > L.a;
+  for (let guard = 0; guard < 8; guard++) {
+    const a = tp.anchors[tp.anchors.length - 1];
+    const end = a.p0 + (ahead - a.t0) / spt();
+    const segEnd = loopOn && tp.next < L.b ? Math.min(end, L.b) : end;
+    if (segEnd > tp.next) { schedRange(tp.next, segEnd, a); tp.next = segEnd; }
+    if (loopOn && tp.next >= L.b) {
+      // Retour au début de la boucle, à l'instant exact de sa fin.
+      tp.anchors.push({ t0: timeOf(L.b, a), p0: L.a }); tp.next = L.a;
+      if (tp.anchors.length > 4) tp.anchors.splice(0, tp.anchors.length - 4);
+      continue;
+    }
+    break;
+  }
+  if (!loopOn && tickAt(ac.currentTime) > songEnd() + TPQ) { stopPlay(); }
+}
+function schedRange(a, b, A) {
+  P.tracks.forEach(t => {
+    if (!audible(t)) return;
+    const ns = t.notes.filter(n => n.s >= a && n.s < b); if (!ns.length) return;
+    // Plusieurs notes ensemble (un accord) : chacune un peu plus douce, comme dans l'atelier.
+    const cnt = new Map(); ns.forEach(n => cnt.set(n.s, (cnt.get(n.s) || 0) + 1));
+    for (const n of ns) { const k = cnt.get(n.s); noteOn(t, n.p, n.v, timeOf(n.s, A), n.d * spt(), t.kind === "drum" || k < 3 ? null : Math.sqrt(2.5 / k)); }
+  });
+  if (st.metro) { const first = Math.ceil(a / TPQ) * TPQ; for (let k = first; k < b; k += TPQ) click(timeOf(k, A), k % barT() === 0); }
+}
+function frame() {
+  if (!tp.on) return;
+  const pos = tickAt(ac.currentTime);
+  if (st.follow) {
+    if (st.view === "roll") { const w = cv.width / dpr - KW, x = (pos - st.x0) * st.ppt; if (x > w * 0.85 || x < 0) st.x0 = Math.max(0, pos - (w * 0.1) / st.ppt); }
+    else { const w = acv.width / dpr - HW, x = (pos - st.ax0) * st.appt; if (x > w * 0.9 || x < 0) st.ax0 = Math.max(0, pos - (w * 0.05) / st.appt); }
+  }
+  draw(pos); posLbl(pos);
+  tp.raf = requestAnimationFrame(frame);
+}
+function setBpm(v) {
+  v = Math.max(30, Math.min(260, Math.round(v)));
+  if (tp.on) { const a = tp.anchors[tp.anchors.length - 1], t = timeOf(tp.next, a); P.bpm = v; tp.anchors = [{ t0: t, p0: tp.next }]; }
+  else P.bpm = v;
+  storeSoon(); renderTop();
+}
+
+// ------------------------------------------------------------------ export MIDI (format 1, une piste par piste)
+function midiBytes() {
+  const out = [], str = s => [...s].map(c => c.charCodeAt(0) & 255);
+  const u32 = n => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const vlq = n => { const b = [n & 127]; while ((n >>= 7) > 0) b.unshift((n & 127) | 128); return b; };
+  const chunk = (id, data) => [...str(id), ...u32(data.length), ...data];
+  const latin = s => unescape(encodeURIComponent(s));
+  const trkData = evs => { evs.sort((x, y) => x.t - y.t || x.o - y.o); let last = 0; const d = [];
+    for (const e of evs) { d.push(...vlq(e.t - last), ...e.b); last = e.t; } d.push(0, 0xff, 0x2f, 0); return d; };
+  const us = Math.round(60000000 / P.bpm);
+  const meta = [{ t: 0, o: 0, b: [0xff, 0x03, ...vlq(latin(P.name).length), ...str(latin(P.name))] },
+    { t: 0, o: 0, b: [0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255] }, { t: 0, o: 0, b: [0xff, 0x58, 4, P.num || 4, 2, 24, 8] }];
+  const tracks = [trkData(meta)]; let ch = 0;
+  P.tracks.forEach(t => {
+    let c = 9; if (t.kind !== "drum") { c = Math.min(15, ch < 9 ? ch : ch + 1); ch++; }
+    const nm = latin(t.name), evs = [{ t: 0, o: 0, b: [0xff, 0x03, ...vlq(nm.length), ...str(nm)] }, { t: 0, o: 0, b: [0xb0 | c, 7, Math.min(127, Math.round(t.vol * 1.27))] }];
+    t.notes.forEach(n => { evs.push({ t: n.s, o: 2, b: [0x90 | c, n.p, Math.max(1, n.v)] }); evs.push({ t: n.s + Math.max(1, n.d), o: 1, b: [0x80 | c, n.p, 0] }); });
+    tracks.push(trkData(evs));
+  });
+  out.push(...chunk("MThd", [0, 1, 0, tracks.length, 0, TPQ]));
+  tracks.forEach(d => out.push(...chunk("MTrk", d)));
+  return new Uint8Array(out);
+}
+let expN = 0;
+function exportMidi() {
+  const b = midiBytes(); let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode.apply(null, b.subarray(i, i + 8192));
+  const fname = "studio-" + (P.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "projet");
+  send("mid|" + (++expN) + "|" + fname + "|" + btoa(s));
+  toast(`✓ ${fname}.mid → Téléchargements`);
+}
+
+// ------------------------------------------------------------------ harmonie du projet (tonalité, degrés)
+const pMode = () => D.modes.find(m => m.id === P.key.mode) || D.modes[0];
+const scalePcs = () => new Set(pMode().iv.map(x => (P.key.root + x) % 12));
+function degChords() {
+  const m = pMode(), iv = m.iv, stack = m.stacks[P.key.stack] ? P.key.stack : Object.keys(m.stacks)[0];
+  return iv.map((x, i) => ({ pc: (P.key.root + x) % 12, l: (P.key.rootL + i) % 7, t: m.stacks[stack][i], b: 0, lab: NUM[i] }));
+}
+const cName = c => sp[c.l][c.pc] + D.types[c.t].sym + bassName(c);
+const keyName = () => sp[P.key.rootL][P.key.root] + " " + pMode().short.toLowerCase();
+
+// ------------------------------------------------------------------ interface
+const css = `
+#studio { position:fixed; inset:0; z-index:4; background:var(--bg); display:none; flex-direction:column; touch-action:none; }
+#studio.on { display:flex; }
+#studio .strow { display:flex; gap:5px; align-items:center; padding:5px 6px; overflow-x:auto; scrollbar-width:none; touch-action:pan-x; flex-shrink:0; }
+#studio .strow::-webkit-scrollbar { display:none; }
+#studio .pill { flex-shrink:0; padding:7px 10px; }
+#studio .pill.gold { background:rgba(245,179,66,.85); color:#1a1205; }
+#studio .pill.red { background:rgba(229,83,75,.8); }
+#studio .lbl2 { font:600 12px system-ui; color:var(--muted); white-space:nowrap; flex-shrink:0; }
+#stTop { background:rgba(255,255,255,.04); border-bottom:1px solid rgba(255,255,255,.08); }
+#stPos { font:700 14px ui-monospace,monospace; color:var(--gold); min-width:64px; text-align:center; flex-shrink:0; }
+#stMain { flex:1; min-height:0; position:relative; }
+#stMain canvas { position:absolute; left:0; top:0; width:100%; height:100%; touch-action:none; }
+#stHeads { position:absolute; left:0; top:40px; width:var(--hw); bottom:0; overflow:hidden; pointer-events:none; }
+.sth { position:absolute; left:0; width:var(--hw); padding:4px 6px 4px 9px; display:flex; flex-direction:column; gap:3px; pointer-events:auto; border-bottom:1px solid rgba(255,255,255,.07); background:var(--card); }
+.sth.on { background:#1d2a3d; }
+.sth .nm { font:700 13px system-ui; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sth .sn { font:500 11px system-ui; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sth .bt { display:flex; gap:4px; }
+.sth .bt button { border:0; border-radius:7px; font:700 11px system-ui; padding:3px 7px; color:var(--fg); background:rgba(255,255,255,.1); }
+.sth .bt button.m.on { background:#e5534b; } .sth .bt button.s.on { background:#f5b342; color:#111; }
+.sth .bar { position:absolute; left:0; top:0; bottom:0; width:4px; }
+#stStep { flex-shrink:0; display:none; flex-direction:column; gap:2px; border-top:1px solid rgba(245,179,66,.5); background:rgba(245,179,66,.05); padding-bottom:4px; }
+#stStep.on { display:flex; }
+#stKb { position:relative; height:112px; margin:2px 6px 0; touch-action:none; }
+#stKb .w, #stKb .b { position:absolute; top:0; border-radius:0 0 6px 6px; }
+#stKb .w { background:#eceff3; border:1px solid #9aa3ad; height:100%; color:#556; font:600 10px system-ui; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; }
+#stKb .b { background:#1b1f26; height:62%; z-index:1; border:1px solid #000; }
+#stKb .w.sc { background:#fff; box-shadow:inset 0 -5px 0 rgba(74,144,217,.55); }
+#stKb .b.sc { box-shadow:inset 0 -5px 0 rgba(74,144,217,.9); }
+#stKb .dn { background:#f5b342 !important; }
+#stPads { display:grid; grid-template-columns:repeat(6,1fr); gap:5px; margin:2px 6px 0; touch-action:none; }
+#stPads div { background:#22304a; border-radius:9px; height:52px; display:flex; align-items:center; justify-content:center; text-align:center; font:600 11px system-ui; padding:2px; }
+#stPads div.dn { background:#f5b342; color:#111; }
+#stBox { position:fixed; inset:0; z-index:6; background:rgba(0,0,0,.6); display:none; align-items:flex-start; justify-content:center; padding-top:30px; }
+#stBox .box { background:var(--card); border-radius:16px; padding:14px; width:min(520px, calc(100% - 28px)); max-height:calc(100vh - 60px); overflow-y:auto; touch-action:pan-y; display:flex; flex-direction:column; gap:9px; }
+#stBox h3 { margin:0; font:800 15px system-ui; color:var(--gold); }
+#stBox .it { display:flex; gap:6px; align-items:center; background:rgba(255,255,255,.05); border-radius:11px; padding:7px 9px; }
+#stBox .it .g { flex:1; min-width:0; font:600 13px system-ui; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#stBox input[type=text] { flex:1; min-width:0; font:600 15px system-ui; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:#0d1420; color:var(--fg); }
+#stBox .chips { display:flex; gap:5px; flex-wrap:wrap; }
+#stToast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); z-index:7; background:#26364f; color:var(--fg); font:600 13px system-ui; padding:9px 14px; border-radius:12px; display:none; box-shadow:0 4px 18px rgba(0,0,0,.5); }
+`;
+document.head.insertAdjacentHTML("beforeend", `<style>${css}</style>`);
+document.body.insertAdjacentHTML("beforeend", `
+<div id="studio">
+  <div class="strow" id="stTop"></div>
+  <div class="strow" id="stBar"></div>
+  <div id="stMain"><canvas id="stArrCv"></canvas><div id="stHeads"></div><canvas id="stCv" style="display:none"></canvas></div>
+  <div id="stStep">
+    <div class="strow" id="stStepA"></div>
+    <div class="strow" id="stStepB"></div>
+    <div id="stKb"></div><div id="stPads" style="display:none"></div>
+    <div class="strow" id="stStepC"></div>
+  </div>
+</div>
+<div id="stBox"><div class="box" id="stBoxIn"></div></div>
+<div id="stToast"></div>`);
+const el = id => document.getElementById(id);
+const root = el("studio"), cv = el("stCv"), acv = el("stArrCv");
+let dpr = window.devicePixelRatio || 1;
+const KW = 50, RH = 40, HW = 132, ARH = 40;
+const VLH = () => st.velLane ? 58 : 0;
+const rowH = () => trk() && trk().kind === "drum" ? Math.max(st.rh, 26) : st.rh;
+const ATH = () => Math.max(56, Math.min(84, Math.floor((root.clientHeight - 200) / Math.max(3, P.tracks.length))));
+let toastT = null;
+function toast(s) { const t = el("stToast"); t.textContent = s; t.style.display = "block"; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = "none"; }, 2600); }
+
+function posLbl(pos = st.cur) {
+  const b = Math.floor(pos / barT()), r = pos - b * barT(), be = Math.floor(r / TPQ), s16 = Math.floor((r - be * TPQ) / 24);
+  el("stPos").textContent = `${b + 1}.${be + 1}.${s16 + 1}`;
+}
+function renderTop() {
+  if (!P) return;
+  el("stTop").innerHTML = `
+    <button class="pill" data-a="close">✕</button>
+    <button class="pill" data-a="projects" style="max-width:150px;overflow:hidden;text-overflow:ellipsis">📁 ${esc(P.name)}</button>
+    <button class="pill" data-a="home">⏮</button>
+    <button class="pill ${tp.on ? "gold" : "on"}" data-a="play" style="min-width:46px">${tp.on ? "⏸" : "▶"}</button>
+    <button class="pill" data-a="stop">⏹</button>
+    <span id="stPos"></span>
+    <button class="pill ${P.loop.on ? "gold" : ""}" data-a="loop">🔁</button>
+    <button class="pill ${st.metro ? "on" : ""}" data-a="metro">🥁 Métro.</button>
+    <button class="pill" data-a="bpm-">−</button><button class="pill" data-a="bpm">♩ ${P.bpm}</button><button class="pill" data-a="bpm+">+</button>
+    <button class="pill" data-a="undo" ${undoS.length ? "" : 'style="opacity:.4"'}>↶</button>
+    <button class="pill" data-a="redo" ${redoS.length ? "" : 'style="opacity:.4"'}>↷</button>
+    <button class="pill" data-a="export">⤓ MIDI</button>`;
+  posLbl(tp.on ? tickAt(ac.currentTime) : st.cur);
+}
+function renderBar() {
+  if (!P) return;
+  const t = trk();
+  if (st.view === "arr") {
+    el("stBar").innerHTML = `
+      <span class="lbl2">PISTES</span>
+      <button class="pill on" data-a="roll">✎ Piano roll</button>
+      <button class="pill" data-a="addInst">＋ Instrument</button>
+      <button class="pill" data-a="addDrum">＋ Batterie</button>
+      <button class="pill" data-a="suite">⇩ Accords${SUITE.length ? " de Ma suite" : ""}</button>
+      <button class="pill" data-a="key">Ton : ${esc(keyName())}</button>
+      <span class="lbl2">Mesures</span><button class="pill" data-a="bars-">−</button><span class="lbl2">${P.bars}</span><button class="pill" data-a="bars+">+</button>
+      <button class="pill" data-a="dupLoop">⧉ Dupliquer la boucle</button>
+      <button class="pill" data-a="clrLoop">⌫ Vider la boucle (piste)</button>
+      <button class="pill" data-a="azoom-">🔍−</button><button class="pill" data-a="azoom+">🔍＋</button>`;
+  } else {
+    const g = GRIDS.find(x => x[1] === st.grid) || GRIDS[4];
+    el("stBar").innerHTML = `
+      <button class="pill" data-a="arr">← Pistes</button>
+      <button class="pill on" data-a="pickTrk" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;border-left:4px solid ${t.color}">${esc(t.name)} ▾</button>
+      <button class="pill" data-a="snd" style="max-width:150px;overflow:hidden;text-overflow:ellipsis">${t.kind === "drum" ? "🥁 " + esc(kitNm(t.kit)) : "🎹 " + esc(soundName(t.snd))}</button>
+      <button class="pill ${st.step ? "gold" : ""}" data-a="step">⏺ Pas à pas</button>
+      <button class="pill ${st.pencil ? "on" : ""}" data-a="pencil">✏️ Crayon</button>
+      <button class="pill" data-a="grid">Grille ${g[0]}</button>
+      <button class="pill" data-a="quant">⇥ Quantifier</button>
+      <button class="pill" data-a="selAll">Tout sélect.</button>
+      <button class="pill" data-a="copy">Copier</button><button class="pill" data-a="paste">Coller</button><button class="pill" data-a="dup">⧉ Dupliquer</button>
+      <button class="pill" data-a="del">🗑</button>
+      ${t.kind === "drum" ? "" : `<button class="pill" data-a="tr-12">−oct</button><button class="pill" data-a="tr-1">−½</button><button class="pill" data-a="tr1">+½</button><button class="pill" data-a="tr12">+oct</button>`}
+      <button class="pill" data-a="len-">◂ durée</button><button class="pill" data-a="len+">durée ▸</button>
+      <button class="pill" data-a="vel-">vél −</button><button class="pill" data-a="vel+">vél +</button>
+      <button class="pill ${st.velLane ? "on" : ""}" data-a="velLane">Vélocités</button>
+      <button class="pill ${st.ghost ? "on" : ""}" data-a="ghost">👻 Autres pistes</button>
+      <button class="pill" data-a="zoom-">🔍−</button><button class="pill" data-a="zoom+">🔍＋</button>
+      <button class="pill" data-a="vzoom-">↕−</button><button class="pill" data-a="vzoom+">↕＋</button>`;
+  }
+}
+const kitNm = id => id === "synth" || !KITS[id] ? "Batterie de synthèse" : KITS[id].n;
+function renderHeads() {
+  const H = el("stHeads"); root.style.setProperty("--hw", HW + "px");
+  if (st.view !== "arr") { H.innerHTML = ""; return; }
+  const h = ATH();
+  H.innerHTML = `<div id="stHeadsIn" style="position:absolute;left:0;top:0;width:100%;transform:translateY(${-st.ay}px)">` + P.tracks.map((t, i) => `<div class="sth ${i === st.trk ? "on" : ""}" data-ti="${i}" style="top:${i * h}px;height:${h}px">
+    <div class="bar" style="background:${t.color}"></div>
+    <div class="nm" data-a="trkMenu" data-ti="${i}">${esc(t.name)} ⋯</div>
+    <div class="sn" data-a="sndT" data-ti="${i}">${t.kind === "drum" ? "🥁 " + esc(kitNm(t.kit)) : "🎹 " + esc(soundName(t.snd))}</div>
+    <div class="bt"><button class="m ${t.mute ? "on" : ""}" data-a="mute" data-ti="${i}">M</button><button class="s ${t.solo ? "on" : ""}" data-a="solo" data-ti="${i}">S</button>
+      <button data-a="volv" data-ti="${i}" style="min-width:52px">🔊 ${t.vol}</button></div>
+  </div>`).join("") + "</div>";
+}
+function renderStep() {
+  el("stStep").classList.toggle("on", st.view === "roll" && st.step);
+  if (!(st.view === "roll" && st.step)) return;
+  const t = trk();
+  el("stStepA").innerHTML = `<span class="lbl2" style="color:var(--gold);font-weight:800">PAS À PAS</span>` +
+    LENS.map(([s, v, nm]) => `<button class="pill ${st.len === v ? "on" : ""}" data-a="len" data-v="${v}" title="${nm}" >${s}</button>`).join("") +
+    `<button class="pill ${st.dot ? "gold" : ""}" data-a="dot">pointée</button><button class="pill ${st.tri ? "gold" : ""}" data-a="tri">triolet</button>` +
+    VELS.map(([s, v]) => `<button class="pill ${st.vel === v ? "on" : ""}" data-a="svel" data-v="${v}">${s}</button>`).join("");
+  el("stStepB").innerHTML = `<button class="pill" data-a="rest">Silence</button><button class="pill" data-a="back">⌫ Retour</button>
+    <button class="pill" data-a="tie">⁀ Liaison</button><button class="pill ${st.chordHold ? "gold" : ""}" data-a="chordHold">Accord ✋</button>
+    <button class="pill" data-a="curL">◀</button><button class="pill" data-a="curR">▶</button>
+    ${t.kind === "drum" ? "" : `<span class="lbl2">Clavier</span><button class="pill" data-a="kb-">−</button><span class="lbl2">Do${st.kbOct - 2}</span><button class="pill" data-a="kb+">+</button>`}
+    <span class="lbl2">Un doigt tenu = accord : les autres touches se posent au même endroit.</span>`;
+  el("stStepC").innerHTML = t.kind === "drum" ? "" : `<span class="lbl2">Accords</span>` +
+    degChords().map((c, k) => `<button class="pill" data-a="ich" data-k="d${k}"><b style="color:var(--gold)">${c.lab}</b> ${esc(cName(c))}</button>`).join("") +
+    (SUITE.length ? `<span class="lbl2">Ma suite</span>` + SUITE.map((c, k) => `<button class="pill" data-a="ich" data-k="s${k}">${esc(cName(c))}</button>`).join("") : "");
+  el("stKb").style.display = t.kind === "drum" ? "none" : "";
+  el("stPads").style.display = t.kind === "drum" ? "grid" : "none";
+  if (t.kind === "drum") el("stPads").innerHTML = DR.slice().reverse().map(d => `<div data-p="${d[0]}">${d[2]}</div>`).join("");
+  else buildKb();
+}
+function buildKb() {
+  const kb = el("stKb"), W = kb.clientWidth || 360, lo = 12 * st.kbOct, nW = W >= 640 ? 21 : 14;  // 2 ou 3 octaves
+  const whites = []; for (let p = lo; whites.length < nW; p++) if (!BLACK.includes(p % 12)) whites.push(p);
+  const hi = whites[whites.length - 1], ww = W / nW, sc = scalePcs();
+  let h = "";
+  whites.forEach((p, i) => { h += `<div class="w ${sc.has(p % 12) ? "sc" : ""}" data-p="${p}" style="left:${i * ww}px;width:${ww}px">${p % 12 === 0 ? noteName(p) : ""}</div>`; });
+  for (let p = lo; p <= hi; p++) if (BLACK.includes(p % 12)) { const i = whites.indexOf(p - 1); h += `<div class="b ${sc.has(p % 12) ? "sc" : ""}" data-p="${p}" style="left:${(i + 1) * ww - ww * 0.31}px;width:${ww * 0.62}px"></div>`; }
+  kb.innerHTML = h;
+}
+function render() {
+  if (!P) return;
+  renderTop(); renderBar(); renderHeads(); renderStep();
+  cv.style.display = st.view === "roll" ? "" : "none"; acv.style.display = st.view === "arr" ? "" : "none";
+  resize();
+}
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const m = el("stMain"), w = m.clientWidth, h = m.clientHeight;
+  [cv, acv].forEach(c => { if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); } });
+  if (st.y0 == null) centerRoll();
+  draw();
+}
+window.addEventListener("resize", () => { if (root.classList.contains("on")) { render(); } });
+
+// ------------------------------------------------------------------ dessin
+function draw(pos) {
+  if (!P || !root.classList.contains("on")) return;
+  if (pos == null && tp.on) pos = tickAt(ac.currentTime);
+  if (st.view === "roll") drawRoll(pos); else drawArr(pos);
+}
+function rollRows() { const t = trk(); return t.kind === "drum" ? DR.length : 88; }
+const pOfRow = r => trk().kind === "drum" ? DR[r][0] : 108 - r;
+const rowOfP = p => trk().kind === "drum" ? (DRI[p] ?? -1) : 108 - p;
+const rx = t => KW + (t - st.x0) * st.ppt;
+const ry = p => RH + rowOfP(p) * rowH() - st.y0;
+const gridH = () => cv.height / dpr - RH - VLH();
+function centerRoll() {
+  const t = trk(); if (!t) return;
+  if (t.kind === "drum") { st.y0 = 0; return; }
+  let mid = 66; if (t.notes.length) mid = t.notes.reduce((a, n) => a + n.p, 0) / t.notes.length;
+  st.y0 = Math.max(0, (108 - mid) * st.rh - (cv.height / dpr - RH - VLH()) / 2);
+}
+function clampRoll() {
+  const maxY = Math.max(0, rollRows() * rowH() - gridH()); st.y0 = Math.max(0, Math.min(maxY, st.y0 || 0)); st.x0 = Math.max(0, st.x0);
+}
+function drawRoll(pos) {
+  clampRoll();
+  const g = cv.getContext("2d"), W = cv.width / dpr, H = cv.height / dpr, t = trk(), rh = rowH(), gh = gridH(), drumT = t.kind === "drum";
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
+  const sc = scalePcs();
+  // Rangées
+  g.save(); g.beginPath(); g.rect(KW, RH, W - KW, gh); g.clip();
+  const r0 = Math.floor(st.y0 / rh), r1 = Math.min(rollRows() - 1, Math.ceil((st.y0 + gh) / rh));
+  for (let r = r0; r <= r1; r++) {
+    const p = pOfRow(r), y = RH + r * rh - st.y0;
+    g.fillStyle = drumT ? (r % 2 ? "#121b2a" : "#16202f") : BLACK.includes(p % 12) ? "#0f1724" : sc.has(p % 12) ? "#1a2638" : "#152030";
+    g.fillRect(KW, y, W - KW, rh);
+    g.fillStyle = !drumT && p % 12 === 0 ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.04)"; g.fillRect(KW, y + rh - 1, W - KW, 1);
+  }
+  // Boucle
+  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.05)"; g.fillRect(rx(P.loop.a), RH, (P.loop.b - P.loop.a) * st.ppt, gh); }
+  vlines(g, W, RH, gh, st.x0, st.ppt, KW);
+  // Fin du morceau
+  const ex = rx(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(ex, RH, W - ex, gh); }
+  // Notes des autres pistes, en fantôme
+  if (st.ghost && !drumT) P.tracks.forEach((o, k) => { if (k === st.trk || o.kind === "drum") return;
+    g.fillStyle = "rgba(255,255,255,.10)";
+    o.notes.forEach(n => { const x = rx(n.s), w = n.d * st.ppt; if (x > W || x + w < KW) return; g.fillRect(x, ry(n.p) + 2, Math.max(2, w - 1), rh - 4); }); });
+  // Notes
+  t.notes.forEach(n => {
+    const x = rx(n.s), w = drumT ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(3, n.d * st.ppt - 1), y = ry(n.p);
+    if (x > W || x + w < KW || y > RH + gh || y + rh < RH) return;
+    const on = st.sel.has(n.i);
+    g.globalAlpha = 0.45 + 0.55 * n.v / 127; g.fillStyle = on ? "#f5b342" : t.color;
+    rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.fill(); g.globalAlpha = 1;
+    if (on) { g.strokeStyle = "#fff"; g.lineWidth = 1.5; rr(g, x, y + 1, w, rh - 2, Math.min(4, rh / 4)); g.stroke(); }
+    if (!drumT && w > 30 && rh >= 13) { g.fillStyle = on ? "#1a1205" : "rgba(0,0,0,.65)"; g.font = `600 ${Math.min(11, rh - 4)}px system-ui`; g.fillText(noteName(n.p), x + 4, y + rh / 2 + 4); }
+  });
+  if (rub) { g.strokeStyle = "#f5b342"; g.setLineDash([4, 3]); g.strokeRect(Math.min(rub.x0, rub.x1), Math.min(rub.y0, rub.y1), Math.abs(rub.x1 - rub.x0), Math.abs(rub.y1 - rub.y0)); g.setLineDash([]); }
+  g.restore();
+  // Clavier
+  g.save(); g.beginPath(); g.rect(0, RH, KW, gh); g.clip();
+  if (!drumT) { g.fillStyle = "#e8ebef"; g.fillRect(0, RH, KW, gh); }
+  for (let r = r0; r <= r1; r++) {
+    const p = pOfRow(r), y = RH + r * rh - st.y0;
+    if (drumT) { g.fillStyle = r % 2 ? "#1f2b3d" : "#243247"; g.fillRect(0, y, KW, rh); g.fillStyle = "#cfd6df"; g.font = "600 9px system-ui";
+      const words = DR[r][2].split(" "); words.forEach((wd, k) => g.fillText(wd, 3, y + rh / 2 + 3 + (k - (words.length - 1) / 2) * 10)); }
+    else { const blk = BLACK.includes(p % 12);
+      if (blk || kbDown === p) { g.fillStyle = kbDown === p ? "#f5b342" : "#1b1f26"; g.fillRect(0, y, blk ? KW * 0.62 : KW, rh); }
+      if (!blk && (p % 12 === 0 || p % 12 === 5)) { g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(0, y + rh - 1, KW, 1); }
+      else if (!blk) { g.fillStyle = "rgba(0,0,0,.12)"; g.fillRect(KW * 0.62, y + rh - 1, KW * 0.38, 1); }
+      if (sc.has(p % 12)) { g.fillStyle = "rgba(74,144,217,.9)"; g.fillRect(KW - 4, y + 1, 3, rh - 2); }
+      if (p % 12 === 0 && rh >= 9) { g.fillStyle = "#333"; g.font = `700 ${Math.min(10, rh - 2)}px system-ui`; g.fillText(noteName(p), 4, y + rh / 2 + 4); } }
+  }
+  g.restore();
+  // Règle (mesures, accords, boucle, curseur)
+  ruler(g, W, KW, st.x0, st.ppt);
+  // Vélocités
+  if (st.velLane) {
+    const y0 = RH + gh, vh = VLH(); g.fillStyle = "#101826"; g.fillRect(0, y0, W, vh); g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, y0, W, 1);
+    g.fillStyle = "#8b97a8"; g.font = "600 10px system-ui"; g.fillText("Vélocité", 4, y0 + 16);
+    t.notes.forEach(n => { const x = rx(n.s); if (x < KW - 2 || x > W) return; const hh = (vh - 8) * n.v / 127;
+      g.fillStyle = st.sel.has(n.i) ? "#f5b342" : t.color; g.fillRect(x, y0 + vh - 3 - hh, 3, hh); g.beginPath(); g.arc(x + 1.5, y0 + vh - 3 - hh, 3, 0, 7); g.fill(); });
+  }
+  cursorLines(g, rx, RH, H - (st.velLane ? 0 : 0), pos, KW, W);
+}
+function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+function vlines(g, W, y, h, x0, ppt, left) {
+  const bt = barT(), t0 = Math.floor(x0 / TPQ) * TPQ, t1 = x0 + (W - left) / ppt;
+  const sub = st.view === "roll" && st.grid > 1 && st.grid * ppt >= 7 ? st.grid : 0;
+  if (sub) { g.fillStyle = "rgba(255,255,255,.035)"; for (let k = Math.floor(x0 / sub) * sub; k <= t1; k += sub) if (k % TPQ) g.fillRect(left + (k - x0) * ppt, y, 1, h); }
+  for (let k = t0; k <= t1; k += TPQ) { const x = left + (k - x0) * ppt; if (x < left) continue;
+    if (k % bt === 0) { g.fillStyle = "rgba(255,255,255,.22)"; g.fillRect(x, y, 1, h); } else if (TPQ * ppt >= 6) { g.fillStyle = "rgba(255,255,255,.08)"; g.fillRect(x, y, 1, h); } }
+}
+function ruler(g, W, left, x0, ppt) {
+  const bt = barT(), h = st.view === "roll" ? RH : ARH;
+  g.fillStyle = "#17202e"; g.fillRect(left, 0, W - left, h); g.fillStyle = "#0d1420"; g.fillRect(0, 0, left, h);
+  if (P.loop.on || P.loop.b > P.loop.a) { const a = left + (P.loop.a - x0) * ppt, w = (P.loop.b - P.loop.a) * ppt;
+    g.fillStyle = P.loop.on ? "rgba(245,179,66,.55)" : "rgba(245,179,66,.18)"; g.fillRect(Math.max(left, a), 0, Math.max(0, Math.min(W, a + w) - Math.max(left, a)), 7); }
+  g.fillStyle = "#c9d2de"; g.font = "700 11px system-ui";
+  const every = bt * ppt < 26 ? Math.ceil(26 / (bt * ppt)) : 1;
+  for (let b = Math.floor(x0 / bt); b * bt <= x0 + (W - left) / ppt; b++) { const x = left + (b * bt - x0) * ppt; if (x < left - 1) continue;
+    g.fillStyle = "rgba(255,255,255,.3)"; g.fillRect(x, 7, 1, h - 7); if (b % every === 0) { g.fillStyle = "#c9d2de"; g.fillText(String(b + 1), x + 3, 19); } }
+  const cy = h - 6;
+  // Accords importés
+  if (P.chords && P.chords.length) { g.font = "700 11px system-ui"; g.fillStyle = "#f5b342";
+    P.chords.forEach(c => { const x = left + (c.s - x0) * ppt; if (x > W || x + c.d * ppt < left) return;
+      if (g.measureText(c.n).width + 6 < c.d * ppt) g.fillText(c.n, Math.max(left + 3, x + 3), cy); }); }
+  g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, h - 1, W, 1);
+}
+function cursorLines(g, X, top, bottom, pos, left, W) {
+  const cx = X(st.cur); if (cx >= left && cx <= W) { g.fillStyle = "#4a90d9"; g.fillRect(cx - 1, top - 8, 2, bottom - top + 8); g.beginPath(); g.moveTo(cx - 6, top - 12); g.lineTo(cx + 6, top - 12); g.lineTo(cx, top - 4); g.fill(); }
+  if (pos != null) { const px = X(pos); if (px >= left && px <= W) { g.fillStyle = "#e5534b"; g.fillRect(px - 1, 0, 2, bottom); } }
+}
+const ax = t => HW + (t - st.ax0) * st.appt;
+function drawArr(pos) {
+  const g = acv.getContext("2d"), W = acv.width / dpr, H = acv.height / dpr, th = ATH();
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
+  st.ax0 = Math.max(0, st.ax0);
+  const lanesH = P.tracks.length * th;
+  st.ay = Math.max(0, Math.min(Math.max(0, lanesH - (H - ARH) + 10), st.ay));
+  const hin = el("stHeadsIn"); if (hin) hin.style.transform = `translateY(${-st.ay}px)`;
+  g.save(); g.translate(0, -st.ay);
+  g.save(); g.beginPath(); g.rect(HW, ARH, W - HW, H - ARH); g.clip();
+  P.tracks.forEach((t, i) => { const y = ARH + i * th; g.fillStyle = i === st.trk ? "#172334" : i % 2 ? "#111a28" : "#131d2c"; g.fillRect(HW, y, W - HW, th); });
+  if (P.loop.on) { g.fillStyle = "rgba(245,179,66,.06)"; g.fillRect(ax(P.loop.a), ARH, (P.loop.b - P.loop.a) * st.appt, lanesH); }
+  vlines(g, W, ARH, lanesH, st.ax0, st.appt, HW);
+  const ex = ax(songEnd()); if (ex < W) { g.fillStyle = "rgba(0,0,0,.4)"; g.fillRect(ex, ARH, W - ex, H - ARH); }
+  P.tracks.forEach((t, i) => {
+    const y = ARH + i * th, aud = audible(t);
+    // La « région » : du début à la fin du morceau, avec ses notes en miniature.
+    g.globalAlpha = aud ? 1 : 0.35;
+    g.fillStyle = t.color + "33"; rr(g, ax(0) + 1, y + 3, songEnd() * st.appt - 2, th - 6, 6); g.fill();
+    if (!t.notes.length) { g.globalAlpha = 1; return; }
+    let lo = 127, hi = 0; t.notes.forEach(n => { lo = Math.min(lo, n.p); hi = Math.max(hi, n.p); });
+    const span = Math.max(12, hi - lo + 1), ih = th - 12;
+    g.fillStyle = t.color;
+    t.notes.forEach(n => { const x = ax(n.s); if (x > W) return; const w = Math.max(2, n.d * st.appt - 1);
+      const yy = t.kind === "drum" ? y + 6 + (DRI[n.p] ?? 0) * ih / DR.length : y + 6 + (hi - n.p + (span - (hi - lo + 1)) / 2) * ih / span;
+      g.fillRect(x, yy, w, Math.max(2, ih / span - 0.5)); });
+    g.globalAlpha = 1;
+  });
+  g.restore(); g.restore();
+  ruler(g, W, HW, st.ax0, st.appt);
+  cursorLines(g, ax, ARH, Math.min(H, ARH + lanesH - st.ay), pos, HW, W);
+  if (!P.tracks.length) { g.fillStyle = "#8b97a8"; g.font = "600 14px system-ui"; g.fillText("Ajoute une piste : ＋ Instrument ou ＋ Batterie", HW + 14, ARH + 40); }
+}
+
+// ------------------------------------------------------------------ gestes : piano roll
+let ptrs = new Map(), gest = null, rub = null, kbDown = null, lastTap = { t: 0, i: null };
+function noteAt(x, y) {
+  const t = trk(), rh = rowH();
+  for (let k = t.notes.length - 1; k >= 0; k--) { const n = t.notes[k], nx = rx(n.s), w = t.kind === "drum" ? Math.max(8, Math.min(n.d * st.ppt, rh)) : Math.max(6, n.d * st.ppt), ny = ry(n.p);
+    if (x >= nx - 2 && x <= nx + w + 2 && y >= ny && y < ny + rh) return { n, edge: t.kind !== "drum" && w > 16 && x > nx + w - Math.max(10, Math.min(22, w * 0.3)) }; }
+  return null;
+}
+const pAtY = y => { const r = Math.floor((y - RH + st.y0) / rowH()); return r >= 0 && r < rollRows() ? pOfRow(r) : null; };
+const tAtX = x => st.x0 + (x - KW) / st.ppt;
+cv.addEventListener("pointerdown", e => {
+  e.preventDefault(); cv.setPointerCapture(e.pointerId);
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  ptrs.set(e.pointerId, { x, y });
+  if (ptrs.size === 2) { // zoom à deux doigts
+    if (gest && gest.kind === "move" && gest.moved) { /* garde le déplacement fait */ }
+    if (gest && gest.kind === "kb") kbStop();
+    const [a, b] = [...ptrs.values()];
+    gest = { kind: "pinch", dx: Math.abs(a.x - b.x), dy: Math.abs(a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, ppt: st.ppt, rh: st.rh, x0: st.x0, y0: st.y0 };
+    rub = null; return;
+  }
+  if (ptrs.size > 2) return;
+  const gh = gridH();
+  if (y < RH) { gest = { kind: "ruler", x0: x, x, moved: false }; return; }
+  if (y > RH + gh) { mark(); gest = { kind: "vel" }; velAt(x, y); return; }
+  if (x < KW) { const p = pAtY(y); if (p != null) { kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
+  const hit = noteAt(x, y);
+  if (hit) {
+    const n = hit.n;
+    if (!st.sel.has(n.i)) { st.sel.clear(); st.sel.add(n.i); }
+    const sel = trk().notes.filter(m => st.sel.has(m.i));
+    gest = { kind: hit.edge ? "size" : "move", x0: x, y0: y, n, orig: sel.map(m => ({ m, s: m.s, p: m.p, d: m.d })), moved: false, lp: n.p };
+    if (!hit.edge) audition(trk(), n.p, n.v, 250);
+    draw(); return;
+  }
+  gest = { kind: "pan", x0: x, y0: y, sx: st.x0, sy: st.y0, moved: false, t: performance.now() };
+  gest.lt = setTimeout(() => { if (gest && gest.kind === "pan" && !gest.moved) { gest = { kind: "rub" }; rub = { x0: x, y0: y, x1: x, y1: y }; if (navigator.vibrate) navigator.vibrate(15); draw(); } }, 420);
+});
+cv.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  ptrs.set(e.pointerId, { x, y });
+  if (!gest) return;
+  if (gest.kind === "pinch" && ptrs.size >= 2) {
+    const [a, b] = [...ptrs.values()], dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    if (gest.dx > 40 && dx > 20) { const tAt = gest.x0 + (gest.cx - KW) / gest.ppt; st.ppt = Math.max(0.05, Math.min(8, gest.ppt * dx / gest.dx)); st.x0 = tAt - (cx - KW) / st.ppt; }
+    if (gest.dy > 40 && dy > 20 && trk().kind !== "drum") { const rAt = (gest.y0 + gest.cy - RH) / gest.rh; st.rh = Math.max(7, Math.min(40, gest.rh * dy / gest.dy)); st.y0 = rAt * st.rh - (cy - RH); }
+    draw(); return;
+  }
+  if (gest.kind === "ruler") { gest.x = x; if (Math.abs(x - gest.x0) > 12) gest.moved = true;
+    if (gest.moved) { const a = Math.min(tAtX(gest.x0), tAtX(x)), b = Math.max(tAtX(gest.x0), tAtX(x)), bt = barT();
+      P.loop.a = Math.max(0, Math.floor(a / bt) * bt); P.loop.b = Math.max(P.loop.a + bt, Math.ceil(b / bt) * bt); P.loop.on = true; renderTop(); draw(); } return; }
+  if (gest.kind === "vel") { velAt(x, y); return; }
+  if (gest.kind === "kb") { const p = pAtY(y); if (p != null && p !== gest.p) { kbStop(); kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
+  if (gest.kind === "rub") { rub.x1 = x; rub.y1 = y; selRect(); draw(); return; }
+  if (gest.kind === "pan") {
+    if (!gest.moved && Math.hypot(x - gest.x0, y - gest.y0) > 8) { gest.moved = true; clearTimeout(gest.lt); st.follow = false; }
+    if (gest.moved) { st.x0 = gest.sx - (x - gest.x0) / st.ppt; st.y0 = gest.sy - (y - gest.y0); draw(); }
+    return;
+  }
+  if (gest.kind === "move" || gest.kind === "size") {
+    if (!gest.moved && Math.hypot(x - gest.x0, y - gest.y0) < 6) return;
+    if (!gest.moved) { gest.moved = true; mark(); }
+    const raw = (x - gest.x0) / st.ppt, o = gest.orig.find(q => q.m === gest.n);
+    if (gest.kind === "move") {
+      const ns = st.grid > 1 ? snapT(o.s + raw) : Math.round(o.s + raw), dt = Math.max(-Math.min(...gest.orig.map(q => q.s)), ns - o.s);
+      let dp = trk().kind === "drum" ? 0 : -Math.round((y - gest.y0) / rowH());
+      if (trk().kind === "drum") { const r0 = rowOfP(o.p), r1 = Math.max(0, Math.min(DR.length - 1, r0 + Math.round((y - gest.y0) / rowH())));
+        gest.orig.forEach(q => { const rq = Math.max(0, Math.min(DR.length - 1, rowOfP(q.p) + r1 - r0)); q.m.p = DR[rq][0]; q.m.s = q.s + dt; }); }
+      else { dp = Math.max(21 - Math.min(...gest.orig.map(q => q.p)), Math.min(108 - Math.max(...gest.orig.map(q => q.p)), dp));
+        gest.orig.forEach(q => { q.m.s = q.s + dt; q.m.p = q.p + dp; }); }
+      if (gest.n.p !== gest.lp) { gest.lp = gest.n.p; audition(trk(), gest.n.p, gest.n.v, 200); }
+    } else {
+      const g = st.grid > 1 ? st.grid : 1, ne = Math.max(o.s + g, st.grid > 1 ? snapT(o.s + o.d + raw) : Math.round(o.s + o.d + raw)), dd = ne - (o.s + o.d);
+      gest.orig.forEach(q => { q.m.d = Math.max(g, q.d + dd); });
+      st.len = Math.max(12, gest.n.d);
+    }
+    draw();
+  }
+});
+function endPtr(e) {
+  if (!ptrs.has(e.pointerId)) return;
+  const pt = ptrs.get(e.pointerId); ptrs.delete(e.pointerId);
+  if (!gest) return;
+  if (gest.kind === "pinch") { if (ptrs.size === 0) gest = null; return; }
+  const G = gest; gest = null;
+  if (G.kind === "ruler") { if (!G.moved) { st.cur = Math.max(0, snapT(tAtX(G.x0), st.grid > 1 ? st.grid : 1)); stepOps = []; posLbl(); } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "vel") { changed(); return; }
+  if (G.kind === "kb") { kbStop(); return; }
+  if (G.kind === "rub") { rub = null; draw(); renderBar(); return; }
+  if (G.kind === "pan") {
+    clearTimeout(G.lt);
+    if (!G.moved && e.type !== "pointercancel") tapEmpty(pt.x, pt.y);
+    return;
+  }
+  if (G.kind === "move" || G.kind === "size") {
+    if (G.moved) { trk().notes.sort((a, b) => a.s - b.s); changed(); return; }
+    // Un toucher sur une note : double toucher = l'effacer.
+    const now = performance.now();
+    if (lastTap.i === G.n.i && now - lastTap.t < 380) { mark(); trk().notes = trk().notes.filter(m => m !== G.n); st.sel.delete(G.n.i); lastTap = { t: 0, i: null }; changed(); return; }
+    lastTap = { t: now, i: G.n.i }; st.len = G.n.d; st.vel = G.n.v; draw();
+  }
+}
+cv.addEventListener("pointerup", endPtr); cv.addEventListener("pointercancel", endPtr);
+function kbStop() { if (gest && gest.vo) { try { gest.vo.stop(); } catch (e) {} } kbDown = null; draw(); }
+function tapEmpty(x, y) {
+  if (st.sel.size) { st.sel.clear(); if (!st.pencil) { draw(); return; } }
+  if (!st.pencil) { draw(); return; }
+  const p = pAtY(y); if (p == null) return;
+  const t = trk(), g = st.grid > 1 ? st.grid : 1, s = Math.max(0, Math.floor(tAtX(x) / g) * g);
+  mark();
+  const n = { p, s, d: t.kind === "drum" ? Math.min(st.len, 24) : st.len, v: st.vel, i: nid++ };
+  t.notes.push(n); t.notes.sort((a, b) => a.s - b.s); st.sel.clear(); st.sel.add(n.i);
+  audition(t, p, n.v, 300); changed(); renderBar();
+}
+function selRect() {
+  const xa = Math.min(rub.x0, rub.x1), xb = Math.max(rub.x0, rub.x1), ya = Math.min(rub.y0, rub.y1), yb = Math.max(rub.y0, rub.y1);
+  st.sel.clear(); trk().notes.forEach(n => { const nx = rx(n.s), w = n.d * st.ppt, ny = ry(n.p); if (nx < xb && nx + w > xa && ny < yb && ny + rowH() > ya) st.sel.add(n.i); });
+}
+function velAt(x, y) {
+  const t = trk(), y0 = RH + gridH(), vh = VLH(), v = Math.max(1, Math.min(127, Math.round((y0 + vh - 3 - y) / (vh - 8) * 127)));
+  const near = t.notes.filter(n => Math.abs(rx(n.s) - x) < 9);
+  const tgt = near.some(n => st.sel.has(n.i)) ? near.filter(n => st.sel.has(n.i)) : near;
+  tgt.forEach(n => { n.v = v; }); if (tgt.length) st.vel = v; draw();
+}
+
+// ------------------------------------------------------------------ gestes : vue Pistes
+let ag = null;
+acv.addEventListener("pointerdown", e => {
+  e.preventDefault(); acv.setPointerCapture(e.pointerId);
+  const r = acv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  ptrs.set(e.pointerId, { x, y });
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; ag = { kind: "pinch", d: Math.abs(a.x - b.x), c: (a.x + b.x) / 2, appt: st.appt, ax0: st.ax0 }; return; }
+  if (x < HW) return;
+  if (y < ARH) { ag = { kind: "ruler", x0: x, moved: false }; return; }
+  ag = { kind: "pan", x0: x, y0: y, sx: st.ax0, sy: st.ay, moved: false, ti: Math.floor((y - ARH + st.ay) / ATH()) };
+});
+acv.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const r = acv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; ptrs.set(e.pointerId, { x, y });
+  if (!ag) return;
+  const atx = X => st.ax0 + (X - HW) / st.appt;
+  if (ag.kind === "pinch" && ptrs.size >= 2) { const [a, b] = [...ptrs.values()], d = Math.abs(a.x - b.x), c = (a.x + b.x) / 2;
+    if (ag.d > 40 && d > 20) { const tAt = ag.ax0 + (ag.c - HW) / ag.appt; st.appt = Math.max(0.01, Math.min(1.5, ag.appt * d / ag.d)); st.ax0 = tAt - (c - HW) / st.appt; draw(); } return; }
+  if (ag.kind === "ruler") { if (Math.abs(x - ag.x0) > 12) ag.moved = true;
+    if (ag.moved) { const bt = barT(), a = Math.min(atx(ag.x0), atx(x)), b = Math.max(atx(ag.x0), atx(x));
+      P.loop.a = Math.max(0, Math.floor(a / bt) * bt); P.loop.b = Math.max(P.loop.a + bt, Math.ceil(b / bt) * bt); P.loop.on = true; renderTop(); draw(); } return; }
+  if (ag.kind === "pan") { if (!ag.moved && Math.hypot(x - ag.x0, y - ag.y0) > 8) { ag.moved = true; st.follow = false; } if (ag.moved) { st.ax0 = ag.sx - (x - ag.x0) / st.appt; st.ay = ag.sy - (y - ag.y0); draw(); } }
+});
+function endA(e) {
+  if (!ptrs.has(e.pointerId)) return; const pt = ptrs.get(e.pointerId); ptrs.delete(e.pointerId);
+  if (!ag) return; if (ag.kind === "pinch") { if (!ptrs.size) ag = null; return; }
+  const G = ag; ag = null; if (e.type === "pointercancel") return;
+  const atx = X => st.ax0 + (X - HW) / st.appt;
+  if (G.kind === "ruler") { if (!G.moved) { st.cur = Math.max(0, Math.round(atx(G.x0) / TPQ) * TPQ); stepOps = []; } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "pan" && !G.moved) {
+    const ti = G.ti; if (ti < 0 || ti >= P.tracks.length) return;
+    const now = performance.now(), dbl = lastTap.i === "a" + ti && now - lastTap.t < 380;
+    st.trk = ti; st.cur = Math.max(0, Math.floor(atx(pt.x) / TPQ) * TPQ); stepOps = [];
+    lastTap = { t: now, i: "a" + ti };
+    if (dbl) { openRoll(true); return; }
+    render();
+  }
+}
+acv.addEventListener("pointerup", endA); acv.addEventListener("pointercancel", endA);
+function openRoll(atCursor) {
+  st.view = "roll"; st.sel.clear(); st.y0 = null; render();
+  if (atCursor) { const w = cv.width / dpr - KW; st.x0 = Math.max(0, st.cur - TPQ); if ((st.x0 - 0) * st.ppt < 0) st.x0 = 0; void w; }
+  centerRoll(); draw();
+}
+
+// ------------------------------------------------------------------ saisie pas à pas
+let stepOps = [], held = new Map(), grp = null;
+function stepNote(p, fromKb) {
+  const t = trk(), L = stepLen();
+  mark();
+  // Un doigt déjà posé sur le clavier (ou « Accord ✋ ») : la note rejoint l'accord, au même endroit.
+  let s;
+  if (grp && (held.size > 1 || st.chordHold)) { s = grp.s; }
+  else { s = st.cur; grp = { s, ids: [] }; stepOps.push({ prev: st.cur, ids: grp.ids, op: grp }); st.cur = s + L; }
+  if (t.kind === "drum" || !t.notes.some(n => n.s === s && n.p === p)) {
+    const n = { p, s, d: t.kind === "drum" ? Math.min(L, 24) : L, v: st.vel, i: nid++ }; t.notes.push(n); grp.ids.push(n.i);
+  }
+  t.notes.sort((a, b) => a.s - b.s);
+  showCursor(); changed(); renderTop();
+}
+function stepChord(notes) {
+  const t = trk(), L = stepLen(), s = st.cur; mark();
+  const ids = [];
+  notes.forEach(p => { if (!t.notes.some(n => n.s === s && n.p === p)) { const n = { p, s, d: L, v: st.vel, i: nid++ }; t.notes.push(n); ids.push(n.i); } });
+  stepOps.push({ prev: s, ids }); st.cur = s + L; grp = null;
+  t.notes.sort((a, b) => a.s - b.s);
+  audio(); ac.resume(); const now = ac.currentTime; notes.forEach(p => noteOn(t, p, st.vel, now, 0.6));
+  showCursor(); changed(); renderTop();
+}
+function stepRest() { stepOps.push({ prev: st.cur, ids: [] }); st.cur += stepLen(); grp = null; showCursor(); renderTop(); draw(); }
+function stepBack() {
+  const t = trk(), op = stepOps.pop(); grp = null;
+  if (op) { mark(); const ids = new Set(op.ids); t.notes = t.notes.filter(n => !ids.has(n.i)); st.cur = op.prev; }
+  else { st.cur = Math.max(0, st.cur - stepLen()); const s = st.cur, before = t.notes.length; const keep = t.notes.filter(n => n.s !== s);
+    if (keep.length !== before) { mark(); t.notes = keep; } }
+  showCursor(); changed(); renderTop();
+}
+function stepTie() {
+  const t = trk(), op = stepOps[stepOps.length - 1], L = stepLen(); grp = null;
+  const ids = op ? new Set(op.ids) : new Set(); const tgt = t.notes.filter(n => ids.has(n.i) && n.s + n.d === st.cur);
+  if (!tgt.length) { toast("Rien à lier : pose d'abord une note."); return; }
+  mark(); tgt.forEach(n => { n.d += L; }); stepOps.push({ prev: st.cur, ids: [], tie: tgt.map(n => n.i), L }); st.cur += L; showCursor(); changed(); renderTop();
+}
+function showCursor() {
+  if (st.view !== "roll") return;
+  const w = cv.width / dpr - KW, x = (st.cur - st.x0) * st.ppt;
+  if (x > w * 0.8 || x < 0) st.x0 = Math.max(0, st.cur - w * 0.3 / st.ppt);
+  // Les notes posées doivent rester visibles en hauteur.
+  const t = trk(); if (t.kind !== "drum" && grp && grp.ids.length) { const n = t.notes.find(m => m.i === grp.ids[grp.ids.length - 1]);
+    if (n) { const y = ry(n.p); if (y < RH || y > RH + gridH() - rowH()) st.y0 = (108 - n.p) * rowH() - gridH() / 2; } }
+}
+// Clavier et pads : plusieurs doigts à la fois.
+function kbPointer(box, sel) {
+  box.addEventListener("pointerdown", e => {
+    e.preventDefault(); const k = e.target.closest(sel); if (!k) return; box.setPointerCapture?.(e.pointerId);
+    const p = +k.dataset.p; k.classList.add("dn");
+    if (held.size === 0 && !st.chordHold) grp = null;
+    held.set(e.pointerId, { p, k, vo: null });
+    audio(); ac.resume();
+    const t = trk(); const h = held.get(e.pointerId);
+    if (t.kind === "drum") noteOn(t, p, st.vel, ac.currentTime, 0.1); else h.vo = play(p, st.vel / 127, t.snd || "hq:grand", busOf(t), false, 0);
+    stepNote(p, true);
+  });
+  const up = e => { const h = held.get(e.pointerId); if (!h) return; held.delete(e.pointerId); h.k.classList.remove("dn"); if (h.vo) { const vo = h.vo; setTimeout(() => { try { vo.stop(); } catch (x) {} }, 120); }
+    if (!held.size && !st.chordHold) grp = null; };
+  box.addEventListener("pointerup", up); box.addEventListener("pointercancel", up);
+}
+kbPointer(el("stKb"), "[data-p]"); kbPointer(el("stPads"), "[data-p]");
+
+// ------------------------------------------------------------------ édition
+let clip = null;
+const selNotes = () => trk().notes.filter(n => st.sel.has(n.i));
+function doQuant() {
+  const ns = st.sel.size ? selNotes() : trk().notes, g = st.grid > 1 ? st.grid : 24; if (!ns.length) return;
+  mark(); ns.forEach(n => { n.s = snapT(n.s, g); if (trk().kind !== "drum") n.d = Math.max(g, snapT(n.d, g)); }); trk().notes.sort((a, b) => a.s - b.s);
+  toast(`Quantifié à la grille ${(GRIDS.find(x => x[1] === g) || ["1/16"])[0]} (${ns.length} notes)`); changed();
+}
+function doCopy() { const ns = selNotes(); if (!ns.length) { toast("Sélectionne des notes (toucher, ou appui long puis glisser)."); return; }
+  const s0 = Math.min(...ns.map(n => n.s)); clip = { kind: trk().kind, notes: ns.map(n => ({ p: n.p, s: n.s - s0, d: n.d, v: n.v })), len: Math.max(...ns.map(n => n.s + n.d)) - s0 };
+  toast(`${ns.length} notes copiées`); }
+function doPaste(at) {
+  if (!clip) { toast("Rien à coller : copie d'abord des notes."); return; }
+  const t = trk(); mark(); st.sel.clear(); const s0 = at ?? st.cur;
+  clip.notes.forEach(c => { const n = { ...c, s: c.s + s0, i: nid++ }; t.notes.push(n); st.sel.add(n.i); });
+  t.notes.sort((a, b) => a.s - b.s); st.cur = s0 + Math.ceil(clip.len / barT()) * barT(); changed(); renderTop();
+}
+function doDup() {
+  const ns = selNotes(); if (!ns.length) { toast("Sélectionne des notes à dupliquer."); return; }
+  const s0 = Math.min(...ns.map(n => n.s)), e0 = Math.max(...ns.map(n => n.s + n.d)), span = Math.ceil((e0 - s0) / barT()) * barT() || barT();
+  mark(); st.sel.clear(); ns.forEach(c => { const n = { p: c.p, s: c.s + span, d: c.d, v: c.v, i: nid++ }; trk().notes.push(n); st.sel.add(n.i); });
+  trk().notes.sort((a, b) => a.s - b.s); changed();
+}
+function doDel() { if (!st.sel.size) { toast("Rien de sélectionné (double toucher sur une note pour l'effacer)."); return; }
+  mark(); trk().notes = trk().notes.filter(n => !st.sel.has(n.i)); st.sel.clear(); changed(); }
+function doTr(d) { const ns = st.sel.size ? selNotes() : trk().notes; if (!ns.length) return;
+  if (ns.some(n => n.p + d < 21 || n.p + d > 108)) { toast("Hors du clavier"); return; }
+  mark(); ns.forEach(n => { n.p += d; }); changed(); if (ns.length < 8) { audio(); const now = ac.currentTime; ns.slice(0, 6).forEach(n => noteOn(trk(), n.p, n.v, now, 0.3)); } }
+function doLen(dir) { const ns = selNotes(); const g = st.grid > 1 ? st.grid : 24;
+  if (!ns.length) { const k = LENS.findIndex(l => l[1] === st.len); st.len = LENS[Math.max(0, Math.min(LENS.length - 1, (k < 0 ? 2 : k) - dir))][1]; toast("Durée des nouvelles notes : " + (LENS.find(l => l[1] === st.len) || [, , ""])[2]); renderStep(); return; }
+  mark(); ns.forEach(n => { n.d = Math.max(g, n.d + dir * g); }); changed(); }
+function doVel(d) { const ns = st.sel.size ? selNotes() : []; if (!ns.length) { st.vel = Math.max(1, Math.min(127, st.vel + d)); toast("Vélocité des nouvelles notes : " + st.vel); return; }
+  mark(); ns.forEach(n => { n.v = Math.max(1, Math.min(127, n.v + d)); }); changed(); }
+function dupLoop() {
+  const L = P.loop; if (!(L.b > L.a)) { toast("Fais d'abord une boucle : glisse le doigt sur la règle des mesures."); return; }
+  const span = L.b - L.a; mark();
+  // Ce qui suit la boucle se décale, comme dans Logic quand on insère des mesures.
+  P.tracks.forEach(t => { const inL = t.notes.filter(n => n.s >= L.a && n.s < L.b);
+    t.notes.forEach(n => { if (n.s >= L.b) n.s += span; });
+    inL.forEach(n => t.notes.push({ ...n, s: n.s + span, i: nid++ })); t.notes.sort((a, b) => a.s - b.s); });
+  if (P.chords) { const inC = P.chords.filter(c => c.s >= L.a && c.s < L.b); P.chords.forEach(c => { if (c.s >= L.b) c.s += span; }); inC.forEach(c => P.chords.push({ ...c, s: c.s + span })); P.chords.sort((a, b) => a.s - b.s); }
+  P.bars += span / barT(); L.a += span; L.b += span; toast("Boucle dupliquée : la copie est maintenant la boucle."); changed(); render();
+}
+function clrLoop() {
+  const L = P.loop, t = trk(); if (!(L.b > L.a)) return; mark(); const before = t.notes.length;
+  t.notes = t.notes.filter(n => !(n.s >= L.a && n.s < L.b)); toast(`${before - t.notes.length} notes effacées sur « ${t.name} »`); changed();
+}
+
+// ------------------------------------------------------------------ accords de Ma suite → pistes
+function importSuite(per, withBass, withDrums) {
+  const chs = SUITE.length ? SUITE : degChords().slice(0, 4).map((c, k) => degChords()[[0, 5, 3, 4][k]]);
+  const len = Math.round(per * barT()), s0 = Math.floor(st.cur / barT()) * barT();
+  mark();
+  const find = (nm, kind, snd) => { let t = P.tracks.find(x => x.name === nm); if (!t) { t = mkTrack(nm, kind, snd, P.tracks.length); P.tracks.push(t); } return t; };
+  const tc = find("Accords", "inst", S.tPad || "hq:grand"), end = s0 + chs.length * len;
+  const clear = t => { t.notes = t.notes.filter(n => n.s < s0 || n.s >= end); };
+  clear(tc);
+  chs.forEach((c, k) => chordNotes(c).forEach(p => tc.notes.push({ p, s: s0 + k * len, d: len, v: 76, i: nid++ })));
+  if (withBass) { const tb = find("Basse", "inst", S.tBass || "hq:basseelec"); clear(tb);
+    chs.forEach((c, k) => { const b = bassNote(c, "r"); tb.notes.push({ p: b, s: s0 + k * len, d: Math.min(len, barT()) - 6, v: 96, i: nid++ });
+      if (len >= barT()) for (let q = barT(); q < len; q += barT()) tb.notes.push({ p: b, s: s0 + k * len + q, d: barT() - 6, v: 90, i: nid++ });
+      if (len >= barT()) tb.notes.push({ p: bassNote(c, "f"), s: s0 + k * len + len - TPQ, d: TPQ - 6, v: 80, i: nid++ }); }); }
+  if (withDrums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); return t; })(); clear(td);
+    for (let b = s0; b < end; b += barT()) for (let q = 0; q < barT(); q += 48) {
+      td.notes.push({ p: 42, s: b + q, d: 24, v: q % TPQ ? 62 : 84, i: nid++ });
+      if (q % (2 * TPQ) === 0) td.notes.push({ p: 36, s: b + q, d: 24, v: 108, i: nid++ });
+      if (q % (2 * TPQ) === TPQ) td.notes.push({ p: 38, s: b + q, d: 24, v: 100, i: nid++ });
+    } }
+  P.chords = (P.chords || []).filter(c => c.s < s0 || c.s >= end);
+  chs.forEach((c, k) => P.chords.push({ s: s0 + k * len, d: len, n: cName(c) })); P.chords.sort((a, b) => a.s - b.s);
+  P.tracks.forEach(t => t.notes.sort((a, b) => a.s - b.s));
+  if (P.bars * barT() < end) P.bars = Math.ceil(end / barT());
+  P.loop = { on: true, a: s0, b: end };
+  preloadAll(); changed(); render();
+  toast(`${chs.length} accords posés${withBass ? " + basse" : ""}${withDrums ? " + batterie" : ""}`);
+}
+
+// ------------------------------------------------------------------ fenêtres
+const box = h => { el("stBoxIn").innerHTML = h; el("stBox").style.display = "flex"; };
+const closeBox = () => { el("stBox").style.display = "none"; };
+function projectsBox() {
+  store();
+  box(`<h3>📁 Projets</h3>
+    <div class="it"><input type="text" id="stNewName" placeholder="Nom du nouveau projet"><button class="pill on" data-b="new">＋ Nouveau</button></div>
+    ${DB.list.slice().sort((a, b) => (b.d || 0) - (a.d || 0)).map(p => `<div class="it"><span class="g">${p.id === P.id ? "▶ " : ""}${esc(p.name)} <span class="lbl2">· ${p.tracks.length} pistes · ${p.bars} mes. · ${new Date(p.d || 0).toLocaleDateString("fr-FR")}</span></span>
+      ${p.id === P.id ? "" : `<button class="pill on" data-b="open" data-id="${p.id}">Ouvrir</button>`}
+      <button class="pill" data-b="ren" data-id="${p.id}">✎</button><button class="pill" data-b="copyP" data-id="${p.id}">⧉</button><button class="pill" data-b="delP" data-id="${p.id}">✕</button></div>`).join("")}
+    <div class="lbl2" style="white-space:normal">Chaque projet est gardé dans le téléphone et recopié côté Linux. ⤓ MIDI l'envoie dans Téléchargements (Logic, Gig Performer…).</div>
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+function trackMenu(i) {
+  const t = P.tracks[i];
+  box(`<h3 style="color:${t.color}">${esc(t.name)}</h3>
+    <div class="it"><input type="text" id="stTrkName" value="${esc(t.name)}"><button class="pill on" data-b="trkRen" data-ti="${i}">Renommer</button></div>
+    <div class="chips">${COLORS.map(c => `<button class="pill" data-b="col" data-ti="${i}" data-c="${c}" style="background:${c};min-width:34px">${c === t.color ? "✓" : "&nbsp;"}</button>`).join("")}</div>
+    <div class="chips"><span class="lbl2">Panoramique</span>${[-0.6, -0.3, 0, 0.3, 0.6].map(v => `<button class="pill ${Math.abs((t.pan || 0) - v) < 0.01 ? "on" : ""}" data-b="pan" data-ti="${i}" data-v="${v}">${v < 0 ? "G " + (-v * 100) : v > 0 ? "D " + v * 100 : "centre"}</button>`).join("")}</div>
+    <div class="chips">
+      <button class="pill" data-b="trkUp" data-ti="${i}">↑ Monter</button><button class="pill" data-b="trkDn" data-ti="${i}">↓ Descendre</button>
+      <button class="pill" data-b="trkDup" data-ti="${i}">⧉ Dupliquer</button><button class="pill" data-b="trkClr" data-ti="${i}">⌫ Vider</button>
+      <button class="pill red" data-b="trkDel" data-ti="${i}">✕ Supprimer</button></div>
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+function suiteBox() {
+  box(`<h3>⇩ ${SUITE.length ? "Ma suite (" + SUITE.length + " accords)" : "Une suite I–vi–IV–V dans le ton"} → pistes</h3>
+    <div class="lbl2" style="white-space:normal">${SUITE.length ? esc(SUITE.map(cName).join(" · ")) : "Pas de « Ma suite » ouverte : une suite d'essai dans le ton du projet."}<br>Posée à partir de la mesure ${Math.floor(st.cur / barT()) + 1} (le curseur bleu), sur la piste « Accords ».</div>
+    <div class="chips"><span class="lbl2">Un accord par</span>
+      <button class="pill" data-b="imp" data-per="0.5">demi-mesure</button><button class="pill on" data-b="imp" data-per="1">mesure</button><button class="pill" data-b="imp" data-per="2">2 mesures</button></div>
+    <div class="chips"><button class="pill on" id="stImpB" data-b="tg">✓ Basse</button><button class="pill" id="stImpD" data-b="tg">Batterie simple</button></div>
+    <button class="pill" data-b="close">Annuler</button>`);
+}
+function gridBox() { box(`<h3>Grille (aimant)</h3><div class="chips">${GRIDS.map(([n, v]) => `<button class="pill ${st.grid === v ? "on" : ""}" data-b="grid" data-v="${v}">${n}</button>`).join("")}</div>
+  <div class="lbl2" style="white-space:normal">Les notes posées, déplacées ou étirées s'aimantent à la grille. « Libre » : au tic près.</div><button class="pill" data-b="close">Fermer</button>`); }
+function keyBox() {
+  box(`<h3>Ton du projet</h3><div class="lbl2" style="white-space:normal">Sert à colorer les notes de la gamme (piano roll, clavier) et aux accords du pas à pas.</div>
+    <div class="chips">${Array.from({ length: 12 }, (_, pc) => `<button class="pill ${P.key.root === pc ? "on" : ""}" data-b="kroot" data-v="${pc}">${sp[keyL[pc]][pc]}</button>`).join("")}</div>
+    <div class="chips">${D.modes.map(m => `<button class="pill ${P.key.mode === m.id ? "on" : ""}" data-b="kmode" data-v="${m.id}">${m.short}</button>`).join("")}</div>
+    <div class="chips">${D.stackKinds.map(([k, l]) => `<button class="pill ${P.key.stack === k ? "on" : ""}" data-b="kstack" data-v="${k}">${l}</button>`).join("")}</div>
+    <button class="pill" data-b="kpage">↺ Celui de la page Musique (${esc(sp[S.rootL][S.root] + " " + mode().short.toLowerCase())})</button>
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+function bpmBox() { box(`<h3>Tempo</h3><div class="chips">${[60, 70, 80, 90, 100, 110, 120, 128, 140].map(v => `<button class="pill ${P.bpm === v ? "on" : ""}" data-b="bpm" data-v="${v}">${v}</button>`).join("")}</div>
+  <div class="chips"><span class="lbl2">Mesure</span>${[3, 4, 6].map(v => `<button class="pill ${P.num === v ? "on" : ""}" data-b="num" data-v="${v}">${v}/${v === 6 ? 8 : 4}</button>`).join("")}</div>
+  <div class="chips"><button class="pill" data-b="tap">👆 Taper le tempo</button><span class="lbl2" id="stTapL"></span></div><button class="pill" data-b="close">Fermer</button>`); }
+function kitBox(i) {
+  const t = P.tracks[i]; const fams = [...new Set(KITS_IDS.map(k => KITS[k].f))];
+  box(`<h3>Kit de « ${esc(t.name)} »</h3><div class="chips"><button class="pill ${t.kit === "synth" ? "on" : ""}" data-b="kit" data-ti="${i}" data-v="synth">Batterie de synthèse</button></div>` +
+    fams.map(f => `<div class="lbl2">${esc(f)}</div><div class="chips">${KITS_IDS.filter(k => KITS[k].f === f).map(k => `<button class="pill ${t.kit === k ? "on" : ""}" data-b="kit" data-ti="${i}" data-v="${k}">${esc(KITS[k].n)}</button>`).join("")}</div>`).join("") +
+    `<button class="pill" data-b="close">Fermer</button>`);
+}
+function trkPickBox() { box(`<h3>Piste à éditer</h3>${P.tracks.map((t, i) => `<div class="it" style="border-left:4px solid ${t.color}"><span class="g">${esc(t.name)}</span><button class="pill ${i === st.trk ? "on" : ""}" data-b="pickT" data-ti="${i}">${i === st.trk ? "✓" : "Choisir"}</button></div>`).join("")}<button class="pill" data-b="close">Fermer</button>`); }
+function volBox(i) {
+  const t = P.tracks[i];
+  box(`<h3 style="color:${t.color}">Volume de « ${esc(t.name)} »</h3>
+    <div class="it"><input type="range" min="0" max="127" value="${t.vol}" id="stVol" style="flex:1"><b id="stVolL" style="width:34px;text-align:right">${t.vol}</b></div>
+    <button class="pill" data-b="close">OK</button>`);
+  el("stVol").oninput = e => { t.vol = +e.target.value; el("stVolL").textContent = t.vol; mixAll(); storeSoon(); renderHeads(); };
+}
+let taps2 = [];
+el("stBox").addEventListener("click", e => {
+  if (e.target === el("stBox")) { closeBox(); return; }
+  const b = e.target.closest("[data-b]"); if (!b) return;
+  const a = b.dataset.b, ti = +b.dataset.ti, id = b.dataset.id;
+  if (a === "close") closeBox();
+  else if (a === "new") { store(); const nm = el("stNewName").value.trim(); const np = newProject(nm); DB.list.push(pack(np)); openProject(np.id); closeBox(); st.view = "arr"; render(); toast("Nouveau projet : " + np.name); }
+  else if (a === "open") { stopPlay(); store(); openProject(id); closeBox(); st.view = "arr"; render(); }
+  else if (a === "ren") { const p = DB.list.find(x => x.id === id); box(`<h3>Renommer le projet</h3><div class="it"><input type="text" id="stRenName" value="${esc(p.name)}"><button class="pill on" data-b="renOk" data-id="${p.id}">OK</button></div><button class="pill" data-b="projects">Annuler</button>`); }
+  else if (a === "renOk") { const p = DB.list.find(x => x.id === id), nm = el("stRenName").value.trim(); if (nm) { p.name = nm; if (p.id === P.id) P.name = nm; } store(); projectsBox(); renderTop(); }
+  else if (a === "projects") projectsBox();
+  else if (a === "copyP") { store(); const p = JSON.parse(JSON.stringify(DB.list.find(x => x.id === id))); p.id = "p" + Date.now().toString(36); p.name += " (copie)"; p.d = Date.now(); DB.list.push(p); store(); projectsBox(); }
+  else if (a === "delP") { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sûr ?"; b.classList.add("red"); return; }
+    DB.list = DB.list.filter(x => x.id !== id); if (id === P.id) { if (!DB.list.length) DB.list.push(pack(newProject())); openProject(DB.list[0].id); render(); } store(); projectsBox(); }
+  else if (a === "trkRen") { P.tracks[ti].name = el("stTrkName").value.trim() || P.tracks[ti].name; storeSoon(); closeBox(); render(); }
+  else if (a === "col") { P.tracks[ti].color = b.dataset.c; storeSoon(); trackMenu(ti); render(); }
+  else if (a === "pan") { P.tracks[ti].pan = +b.dataset.v; mixAll(); storeSoon(); trackMenu(ti); }
+  else if (a === "trkUp" || a === "trkDn") { const j = ti + (a === "trkUp" ? -1 : 1); if (j < 0 || j >= P.tracks.length) return; const tt = P.tracks; [tt[ti], tt[j]] = [tt[j], tt[ti]]; st.trk = j; storeSoon(); trackMenu(j); render(); }
+  else if (a === "trkDup") { mark(); const o = P.tracks[ti], c = { ...JSON.parse(JSON.stringify(o)), id: "t" + Math.random().toString(36).slice(2, 8), name: o.name + " 2", solo: false, color: COLORS[P.tracks.length % COLORS.length] };
+    c.notes = o.notes.map(n => ({ ...n, i: nid++ })); P.tracks.splice(ti + 1, 0, c); st.trk = ti + 1; changed(); closeBox(); render(); }
+  else if (a === "trkClr") { mark(); P.tracks[ti].notes = []; changed(); closeBox(); render(); }
+  else if (a === "trkDel") { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Supprimer pour de bon ?"; return; }
+    mark(); P.tracks.splice(ti, 1); st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1)); if (!P.tracks.length) P.tracks.push(mkTrack("Mélodie", "inst", S.tSolo, 0)); changed(); closeBox(); st.view = "arr"; render(); }
+  else if (a === "tg") { b.classList.toggle("on"); b.textContent = (b.classList.contains("on") ? "✓ " : "") + b.textContent.replace(/^✓ /, ""); }
+  else if (a === "imp") { const wb = el("stImpB").classList.contains("on"), wd = el("stImpD").classList.contains("on"); closeBox(); importSuite(+b.dataset.per, wb, wd); }
+  else if (a === "grid") { st.grid = +b.dataset.v; closeBox(); renderBar(); draw(); }
+  else if (a === "kroot") { P.key.root = +b.dataset.v; P.key.rootL = keyL[P.key.root]; storeSoon(); keyBox(); render(); }
+  else if (a === "kmode") { P.key.mode = b.dataset.v; storeSoon(); keyBox(); render(); }
+  else if (a === "kstack") { P.key.stack = b.dataset.v; storeSoon(); keyBox(); render(); }
+  else if (a === "kpage") { P.key = { root: S.root, rootL: S.rootL, mode: S.mode, stack: S.stack }; storeSoon(); closeBox(); render(); }
+  else if (a === "bpm") { setBpm(+b.dataset.v); bpmBox(); }
+  else if (a === "num") { P.num = +b.dataset.v; storeSoon(); bpmBox(); render(); }
+  else if (a === "tap") { const now = performance.now(); taps2 = taps2.filter(x => now - x < 2500); taps2.push(now);
+    if (taps2.length >= 3) { const d = (taps2[taps2.length - 1] - taps2[0]) / (taps2.length - 1); setBpm(60000 / d); el("stTapL").textContent = "♩ = " + P.bpm; } else el("stTapL").textContent = "encore…"; }
+  else if (a === "kit") { P.tracks[ti].kit = b.dataset.v; if (b.dataset.v !== "synth") kitLoad(b.dataset.v); storeSoon(); kitBox(ti); render();
+    setTimeout(() => { const t = P.tracks[ti]; audio(); const now = ac.currentTime; noteOn(t, 36, 100, now + 0.05, 0.1); noteOn(t, 42, 80, now + 0.3, 0.1); noteOn(t, 38, 100, now + 0.55, 0.1); }, 400); }
+  else if (a === "pickT") { st.trk = ti; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
+});
+
+// ------------------------------------------------------------------ boutons
+root.addEventListener("click", e => {
+  const b = e.target.closest("[data-a]"); if (!b || !P) return;
+  const a = b.dataset.a, ti = b.dataset.ti != null ? +b.dataset.ti : null;
+  if (navigator.vibrate) navigator.vibrate(8);
+  switch (a) {
+    case "close": hide(); break;
+    case "projects": projectsBox(); break;
+    case "home": st.cur = P.loop.on ? P.loop.a : 0; st.x0 = Math.max(0, st.cur - TPQ); st.ax0 = 0; stepOps = []; if (tp.on) startPlay(); renderTop(); draw(); break;
+    case "play": if (tp.on) { const p = tickAt(ac.currentTime); stopPlay(); st.cur = Math.max(0, Math.floor(p / TPQ) * TPQ); renderTop(); draw(); } else startPlay(); break;
+    case "stop": stopPlay(); renderTop(); draw(); break;
+    case "loop": P.loop.on = !P.loop.on; if (P.loop.on && !(P.loop.b > P.loop.a)) { P.loop.a = 0; P.loop.b = songEnd(); } storeSoon(); renderTop(); draw(); break;
+    case "metro": st.metro = !st.metro; renderTop(); break;
+    case "bpm-": setBpm(P.bpm - 1); break; case "bpm+": setBpm(P.bpm + 1); break; case "bpm": bpmBox(); break;
+    case "undo": undo(); render(); break; case "redo": redo(); render(); break;
+    case "export": exportMidi(); break;
+    case "roll": openRoll(true); break;
+    case "arr": st.view = "arr"; render(); break;
+    case "addInst": { mark(); const t = mkTrack("Piste " + (P.tracks.length + 1), "inst", S.tSolo || "hq:grand", P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; changed(); render(); soundFor = "trk"; openSounds("trk"); break; }
+    case "addDrum": { mark(); const t = mkTrack("Batterie", "drum", null, P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; if (t.kit !== "synth") kitLoad(t.kit); changed(); render(); kitBox(st.trk); break; }
+    case "suite": suiteBox(); break;
+    case "key": keyBox(); break;
+    case "bars-": { const need = Math.ceil(Math.max(0, ...P.tracks.flatMap(t => t.notes.map(n => n.s + n.d))) / barT()); if (P.bars > Math.max(1, need)) { P.bars--; storeSoon(); renderBar(); draw(); } else toast("Des notes occupent la dernière mesure."); break; }
+    case "bars+": P.bars++; storeSoon(); renderBar(); draw(); break;
+    case "dupLoop": dupLoop(); break;
+    case "clrLoop": clrLoop(); break;
+    case "azoom-": st.appt = Math.max(0.01, st.appt / 1.4); draw(); break; case "azoom+": st.appt = Math.min(1.5, st.appt * 1.4); draw(); break;
+    case "zoom-": st.ppt = Math.max(0.05, st.ppt / 1.4); draw(); break; case "zoom+": st.ppt = Math.min(8, st.ppt * 1.4); draw(); break;
+    case "vzoom-": st.rh = Math.max(7, st.rh - 3); draw(); break; case "vzoom+": st.rh = Math.min(40, st.rh + 3); draw(); break;
+    case "trkMenu": trackMenu(ti); break;
+    case "sndT": st.trk = ti; if (P.tracks[ti].kind === "drum") kitBox(ti); else { soundFor = "trk"; openSounds("trk"); } renderHeads(); break;
+    case "snd": if (trk().kind === "drum") kitBox(st.trk); else { soundFor = "trk"; openSounds("trk"); } break;
+    case "mute": P.tracks[ti].mute = !P.tracks[ti].mute; mixAll(); storeSoon(); renderHeads(); draw(); break;
+    case "solo": P.tracks[ti].solo = !P.tracks[ti].solo; mixAll(); storeSoon(); renderHeads(); draw(); break;
+    case "vol-": case "vol+": { const t = P.tracks[ti]; t.vol = Math.max(0, Math.min(127, t.vol + (a === "vol+" ? 8 : -8))); mixAll(); storeSoon(); renderHeads(); break; }
+    case "volv": volBox(ti); break;
+    case "pickTrk": trkPickBox(); break;
+    case "step": st.step = !st.step; grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
+    case "pencil": st.pencil = !st.pencil; renderBar(); toast(st.pencil ? "Crayon : un toucher dans la grille pose une note." : "Crayon retiré : un toucher dans la grille ne pose rien."); break;
+    case "grid": gridBox(); break;
+    case "quant": doQuant(); break;
+    case "selAll": trk().notes.forEach(n => st.sel.add(n.i)); draw(); break;
+    case "copy": doCopy(); break; case "paste": doPaste(); break; case "dup": doDup(); break; case "del": doDel(); break;
+    case "tr-12": doTr(-12); break; case "tr-1": doTr(-1); break; case "tr1": doTr(1); break; case "tr12": doTr(12); break;
+    case "len-": doLen(-1); break; case "len+": doLen(1); break;
+    case "vel-": doVel(-10); break; case "vel+": doVel(10); break;
+    case "velLane": st.velLane = !st.velLane; renderBar(); draw(); break;
+    case "ghost": st.ghost = !st.ghost; renderBar(); draw(); break;
+    case "len": st.len = +b.dataset.v; grp = null; renderStep(); break;
+    case "dot": st.dot = !st.dot; if (st.dot) st.tri = false; renderStep(); break;
+    case "tri": st.tri = !st.tri; if (st.tri) st.dot = false; renderStep(); break;
+    case "svel": st.vel = +b.dataset.v; renderStep(); break;
+    case "rest": stepRest(); break; case "back": stepBack(); break; case "tie": stepTie(); break;
+    case "chordHold": st.chordHold = !st.chordHold; grp = null; renderStep(); if (st.chordHold) toast("Accord ✋ : les notes s'empilent au même endroit ; retouche pour avancer."); else { st.cur = stepOps.length ? st.cur : st.cur; } break;
+    case "curL": st.cur = Math.max(0, st.cur - stepLen()); grp = null; showCursor(); renderTop(); draw(); break;
+    case "curR": st.cur += stepLen(); grp = null; showCursor(); renderTop(); draw(); break;
+    case "kb-": st.kbOct = Math.max(2, st.kbOct - 1); renderStep(); break; case "kb+": st.kbOct = Math.min(7, st.kbOct + 1); renderStep(); break;
+    case "ich": { const k = b.dataset.k, c = k[0] === "d" ? degChords()[+k.slice(1)] : SUITE[+k.slice(1)]; stepChord(chordNotes(c)); break; }
+  }
+});
+
+// ------------------------------------------------------------------ ouverture
+function show() {
+  if (!P) openProject(DB.cur);
+  root.classList.add("on"); audio(); preloadAll(); mixAll(); render();
+}
+function hide() { stopPlay(); store(); root.classList.remove("on"); closeBox(); }
+document.addEventListener("visibilitychange", () => { if (document.hidden && tp.on) { stopPlay(); } if (document.hidden) store(); });
+// Pour le sélecteur de sons de l'atelier.
+const api = {
+  show, hide, get on() { return root.classList.contains("on"); },
+  snd: () => (P && trk() ? trk().snd : null),
+  setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
+  tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
+  sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
+  test: { get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
+};
+return api;
+})();
+window.__studioSounds = studio.sounds;
+if (Q.get("studio") === "1") setTimeout(() => studio.show(), 50);
+
+$("studioBtn").onclick = () => studio.show();
 </script>
 </body>
 </html>
