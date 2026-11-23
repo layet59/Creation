@@ -5222,17 +5222,16 @@ function parseMidi(bytes) {
   return { fmt, bpm, num, markers, tracks: rawTracks };
 }
 let midImpMode = "new";
-function importMidiBytes(bytes, fname, mode = "new") {
-  const M = parseMidi(bytes);
-  if (!M.tracks.length) { toast("Aucune note trouvée dans ce fichier MIDI."); return null; }
+function importParsedMidi(M, fname, mode = "new") {
+  if (!M || !M.tracks || !M.tracks.length) { toast("Aucune note trouvée dans ce fichier MIDI."); return null; }
   const bt = (M.num || 4) * TPQ;
   const maxEnd = Math.max(bt, ...M.tracks.flatMap(mt => mt.notes.map(n => n.s + n.d)));
   const bars = Math.max(4, Math.ceil(maxEnd / bt));
-  const cleanName = String(fname || "Import MIDI").replace(/\.(midi?|kar)$/i, "").slice(0, 32) || "Import MIDI";
+  const cleanName = String(fname || M.name || "Import MIDI").replace(/\.(midi?|kar)$/i, "").slice(0, 32) || "Import MIDI";
   if (mode === "new") {
     store();
     const np = newProject(cleanName);
-    np.bpm = M.bpm; np.num = M.num; np.bars = bars; np.tracks = []; np.markers = [];
+    np.bpm = M.bpm || 120; np.num = M.num || 4; np.bars = bars; np.tracks = []; np.markers = [];
     DB.list.push(pack(np)); openProject(np.id);
   } else {
     mark();
@@ -5240,7 +5239,7 @@ function importMidiBytes(bytes, fname, mode = "new") {
   }
   M.tracks.forEach((rt, idx) => {
     const isDrum = rt.ch === 9;
-    const t = mkTrack(rt.name, isDrum ? "drum" : "inst", isDrum ? null : gmProgToSound(rt.prog), P.tracks.length + idx);
+    const t = mkTrack(rt.name, isDrum ? "drum" : "inst", isDrum ? null : gmProgToSound(rt.prog || 0), P.tracks.length + idx);
     t.vol = Math.min(127, Math.max(20, rt.vol || 80));
     t.pan = Math.max(-1, Math.min(1, rt.pan || 0));
     const ns = rt.notes.map(n => ({
@@ -5251,7 +5250,7 @@ function importMidiBytes(bytes, fname, mode = "new") {
     t.regions = [mkReg(rt.name, 0, tEnd, ns)];
     P.tracks.push(t);
   });
-  if (M.markers.length) {
+  if (M.markers && M.markers.length) {
     M.markers.sort((a, b) => a.s - b.s);
     M.markers.forEach((mk, i) => {
       const nextS = i + 1 < M.markers.length ? M.markers[i + 1].s : bars * bt;
@@ -5261,15 +5260,43 @@ function importMidiBytes(bytes, fname, mode = "new") {
   P.loop = { on: true, a: 0, b: Math.min(bars * bt, 8 * bt) };
   st.trk = 0; st.regId = P.tracks[0]?.regions[0]?.id || null;
   st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.25, (acv.width / dpr - HW - 10) / Math.max(bt, bars * bt)));
-  preloadAll(); changed(); render();
-  toast(`✓ ${M.tracks.length} pistes importées · ${P.bpm} BPM · ${P.bars} mes.`);
+  preloadAll(); changed(); store(); render();
+  toast(`✓ ${M.tracks.length} pistes importées · ${P.bpm} BPM · ${P.bars} mes.${M.trimmed ? " (extrait)" : ""}`);
   return M;
 }
+function importMidiBytes(bytes, fname, mode = "new") {
+  return importParsedMidi(parseMidi(bytes), fname, mode);
+}
+function requestMidiPick(mode = "new") {
+  store();
+  try { document.title = "midmenu|" + Date.now() + "|" + mode; } catch (e) {}
+  toast("Ouverture du sélecteur de fichiers MIDI…");
+}
+function checkHashMidiImport() {
+  try {
+    const seq = Q.get("mi") || "";
+    const mode = Q.get("mm") === "add" ? "add" : "new";
+    const raw = new URLSearchParams(location.hash.slice(1)).get("mi");
+    if (!raw || !seq || seq === "0") return;
+    if (sessionStorage.getItem("st_mi_seq") === seq) return;
+    sessionStorage.setItem("st_mi_seq", seq);
+    const J = JSON.parse(raw);
+    if (!J || !J.ok) { toast("Import MIDI : " + (J && J.err ? J.err : "fichier illisible")); return; }
+    const M = {
+      name: J.name, bpm: J.bpm || 120, num: J.num || 4, trimmed: !!J.tr,
+      markers: (J.m || []).map(x => ({ s: x.s, name: x.n })),
+      tracks: (J.t || []).map(x => ({ name: x.n, ch: x.ch, prog: x.pr || 0, vol: x.v || 80, pan: x.p || 0, notes: (x.ns || []).map(n => ({ p: n[0], s: n[1], d: n[2], v: n[3] })) }))
+    };
+    importParsedMidi(M, J.name, mode);
+  } catch (e) { toast("Import MIDI : " + e.message); }
+}
+window.addEventListener("hashchange", checkHashMidiImport);
 function impMidBox() {
   box(`<h3>⤒ Importer un fichier MIDI (.mid)</h3>
-    <div class="lbl2" style="white-space:normal">Importe un fichier MIDI multipiste (format 0 ou 1) directement dans le Studio : pistes séparées, batterie canal 10, tempo, marqueurs de sections et sons attribués automatiquement.</div>
+    <div class="lbl2" style="white-space:normal">Ouvre le sélecteur du téléphone (et la liste de tes fichiers .mid déjà téléchargés) : pistes séparées, batterie canal 10, tempo, marqueurs et sons automatiques.</div>
     <div class="chips"><button class="pill gold" data-b="midPick" data-v="new">📂 Nouveau projet depuis .mid</button>
       <button class="pill on" data-b="midPick" data-v="add">＋ Ajouter pistes au projet actuel</button></div>
+    <div class="lbl2" style="white-space:normal">Astuce : tu as aussi le bouton « ⤒ .mid » tout en haut à droite de l'écran.</div>
     <button class="pill" data-b="close">Annuler</button>`);
 }
 el("stMidIn").addEventListener("change", e => {
@@ -5446,7 +5473,7 @@ el("stBox").addEventListener("click", e => {
     auditionChordObj(c); changed(); chordEditBox(ci); render(); }
   else if (a === "ctApply") { closeBox(); applyChordTrack(); }
   else if (a === "impMidBox") impMidBox();
-  else if (a === "midPick") { midImpMode = b.dataset.v || "new"; closeBox(); el("stMidIn").click(); }
+  else if (a === "midPick") { midImpMode = b.dataset.v || "new"; closeBox(); requestMidiPick(midImpMode); }
   else if (a === "pickT") { st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
 });
 
@@ -5539,6 +5566,7 @@ root.addEventListener("click", e => {
 function show() {
   if (!P) openProject(DB.cur);
   root.classList.add("on"); audio(); preloadAll(); mixAll(); render();
+  checkHashMidiImport();
 }
 function hide() { stopPlay(); store(); root.classList.remove("on"); closeBox(); }
 document.addEventListener("visibilitychange", () => { if (document.hidden && tp.on) { stopPlay(); } if (document.hidden) store(); });
