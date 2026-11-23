@@ -2686,7 +2686,8 @@ function changed() { fitBars(); storeSoon(); draw(); renderTop(); }
 
 // ------------------------------------------------------------------ état de l'affichage
 const st = { view: "arr", trk: 0, regId: null, cur: 0, sel: new Set(), grid: 24, len: 96, dot: false, tri: false, vel: 80, pencil: true, step: false,
-  x0: 0, ppt: 0.9, y0: null, rh: 16, ax0: 0, ay: 0, appt: 0.12, ghost: true, kbOct: 4, follow: true, metro: false, chordHold: false, velLane: true };
+  x0: 0, ppt: 0.9, y0: null, rh: 16, ax0: 0, ay: 0, appt: 0.12, ghost: true, kbOct: 4, follow: true, metro: false, chordHold: false, velLane: true,
+  scaleLock: false, seq: false, seqBar: 0, seqAll: false, qStr: 100, qSw: 0 };
 const barT = () => (P.num || 4) * TPQ;
 const songEnd = () => P.bars * barT();
 const trk = () => P.tracks[st.trk];
@@ -3089,6 +3090,7 @@ function frame() {
     else { const w = acv.width / dpr - HW, x = (pos - st.ax0) * st.appt; if (x > w * 0.9 || x < 0) st.ax0 = Math.max(0, pos - (w * 0.05) / st.appt); }
   }
   draw(pos); posLbl(pos);
+  if (st.seq) seqPlayhead(pos);
   tp.raf = requestAnimationFrame(frame);
 }
 function setBpm(v) {
@@ -3178,6 +3180,19 @@ const css = `
 .mxr .b button.m.on { background:#e5534b; } .mxr .b button.s.on { background:#f5b342; color:#111; } .mxr .b button.fx.on { background:#4a90d9; color:#fff; }
 #stEqCv { width:100%; height:92px; border-radius:10px; background:#0d1420; border:1px solid rgba(255,255,255,.08); display:block; }
 .fxsl { display:flex; align-items:center; gap:8px; font:600 12px system-ui; } .fxsl span { min-width:74px; color:var(--muted); } .fxsl input { flex:1; min-width:0; } .fxsl b { min-width:46px; text-align:right; font-variant-numeric:tabular-nums; }
+#stSeq { flex-shrink:0; display:none; flex-direction:column; gap:4px; max-height:60%; overflow-y:auto; touch-action:pan-y; border-top:1px solid rgba(245,179,66,.55); background:#101927; padding:5px 6px 8px; }
+#stSeq.on { display:flex; }
+.sqgrid { display:flex; flex-direction:column; gap:3px; touch-action:none; }
+.sqrow { display:grid; grid-template-columns:86px repeat(16, minmax(0,1fr)); gap:2px; align-items:center; }
+.sqrow .snm { font:700 11px system-ui; color:#cfd6df; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:4px 4px; border-radius:6px; background:rgba(255,255,255,.06); text-align:left; }
+.sqrow .sqc { height:28px; border-radius:5px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.04); position:relative; }
+.sqrow .sqc.b1 { background:rgba(255,255,255,.10); }
+.sqrow .sqc.v1 { background:rgba(74,144,217,.38); border-color:rgba(74,144,217,.6); }
+.sqrow .sqc.v2 { background:#4a90d9; border-color:#8bc0f7; }
+.sqrow .sqc.v3 { background:#f5b342; border-color:#fff2c6; }
+.sqrow .sqc.cur { box-shadow:0 0 0 2px #fff inset; }
+.sqhdr { display:grid; grid-template-columns:86px repeat(16, minmax(0,1fr)); gap:2px; font:700 9px ui-monospace,monospace; color:var(--muted); text-align:center; }
+.sqhdr b { color:var(--gold); }
 #stStep { flex-shrink:0; display:none; flex-direction:column; gap:2px; border-top:1px solid rgba(245,179,66,.5); background:rgba(245,179,66,.05); padding-bottom:4px; }
 #stStep.on { display:flex; }
 #stKb { position:relative; height:112px; margin:2px 6px 0; touch-action:none; }
@@ -3206,6 +3221,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <div class="strow" id="stBar"></div>
   <div id="stMain"><canvas id="stArrCv"></canvas><div id="stHeads"></div><canvas id="stCv" style="display:none"></canvas></div>
   <div id="stMix"></div>
+  <div id="stSeq"></div>
   <div id="stStep">
     <div class="strow" id="stStepA"></div>
     <div class="strow" id="stStepB"></div>
@@ -3258,6 +3274,7 @@ function renderBar() {
       <button class="pill gold" data-a="suite">⇩ Suite…</button>
       <button class="pill ${mc ? "on" : ""}" data-a="sections">🏷 Sections${mc ? " (" + mc + ")" : ""}</button>
       <button class="pill on" data-a="roll">✎ Piano roll</button>
+      ${t && t.kind === "drum" ? `<button class="pill ${st.seq ? "gold" : ""}" data-a="seq">⊞ Séq. 16 pas</button>` : ""}
       ${r ? `
       <button class="pill" data-a="splitReg">✂️ Scinder</button>
       <button class="pill ${r.rep > 1 ? "gold" : ""}" data-a="loopReg">🔁${r.rep > 1 ? " ×" + r.rep : " Boucler"}</button>
@@ -3282,9 +3299,12 @@ function renderBar() {
       ${r ? `<button class="pill" data-a="pickReg" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;border-left:3px solid ${regCol(r, t)}">📦 ${esc(r.name)}${r.rep > 1 ? " ×" + r.rep : ""} ▾</button>` : `<button class="pill" data-a="addReg">＋ Clip</button>`}
       <button class="pill" data-a="snd" style="max-width:150px;overflow:hidden;text-overflow:ellipsis">${t.kind === "drum" ? "🥁 " + esc(kitNm(t.kit)) : "🎹 " + esc(soundName(t.snd))}</button>
       <button class="pill ${st.step ? "gold" : ""}" data-a="step">⏺ Pas à pas</button>
+      ${t.kind === "drum" ? `<button class="pill ${st.seq ? "gold" : ""}" data-a="seq">⊞ Séq. 16 pas</button>` : ""}
       <button class="pill ${st.pencil ? "on" : ""}" data-a="pencil">✏️ Crayon</button>
+      ${t.kind === "drum" ? "" : `<button class="pill ${st.scaleLock ? "gold" : ""}" data-a="scaleLock">🔒 Gamme</button>`}
       <button class="pill" data-a="grid">Grille ${g[0]}</button>
       <button class="pill" data-a="quant">⇥ Quantifier</button>
+      <button class="pill on" data-a="midiTools">✨ MIDI…</button>
       <button class="pill" data-a="selAll">Tout sélect.</button>
       <button class="pill" data-a="copy">Copier</button><button class="pill" data-a="paste">Coller</button><button class="pill" data-a="dup">⧉ Dupliquer</button>
       <button class="pill" data-a="del">🗑</button>
@@ -3343,7 +3363,7 @@ function buildKb() {
 }
 function render() {
   if (!P) return;
-  renderTop(); renderBar(); renderHeads(); renderStep(); renderMixer();
+  renderTop(); renderBar(); renderHeads(); renderStep(); renderMixer(); renderSeq();
   cv.style.display = st.view === "roll" ? "" : "none"; acv.style.display = st.view === "arr" ? "" : "none";
   resize();
 }
@@ -3633,7 +3653,7 @@ cv.addEventListener("pointerdown", e => {
   const gh = gridH();
   if (y < RH) { gest = { kind: "ruler", x0: x, y0: y, x, moved: false }; return; }
   if (y < top) { gest = { kind: "marker", x0: x }; return; }
-  if (y > top + gh) { mark(); gest = { kind: "vel" }; velAt(x, y); return; }
+  if (y > top + gh) { mark(); gest = { kind: "vel", lx: x, ly: y }; velAt(x, y); return; }
   if (x < KW) { const p = pAtY(y); if (p != null) { kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
   const hit = noteAt(x, y);
   if (hit) {
@@ -3661,7 +3681,7 @@ cv.addEventListener("pointermove", e => {
   if (gest.kind === "ruler") { gest.x = x; if (Math.abs(x - gest.x0) > 12) gest.moved = true;
     if (gest.moved) { const a = Math.min(tAtX(gest.x0), tAtX(x)), b = Math.max(tAtX(gest.x0), tAtX(x)), bt = barT();
       P.loop.a = Math.max(0, Math.floor(a / bt) * bt); P.loop.b = Math.max(P.loop.a + bt, Math.ceil(b / bt) * bt); P.loop.on = true; renderTop(); draw(); } return; }
-  if (gest.kind === "vel") { velAt(x, y); return; }
+  if (gest.kind === "vel") { velSweep(gest.lx, gest.ly, x, y); gest.lx = x; gest.ly = y; return; }
   if (gest.kind === "kb") { const p = pAtY(y); if (p != null && p !== gest.p) { kbStop(); kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
   if (gest.kind === "rub") { rub.x1 = x; rub.y1 = y; selRect(); draw(); return; }
   if (gest.kind === "pan") {
@@ -3680,7 +3700,7 @@ cv.addEventListener("pointermove", e => {
       if (trk().kind === "drum") { const r0 = rowOfP(o.p), r1 = Math.max(0, Math.min(DR.length - 1, r0 + Math.round((y - gest.y0) / rowH())));
         gest.orig.forEach(q => { const rq = Math.max(0, Math.min(DR.length - 1, rowOfP(q.p) + r1 - r0)); q.m.p = DR[rq][0]; q.m.s = q.s + dt; }); }
       else { dp = Math.max(21 - Math.min(...gest.orig.map(q => q.p)), Math.min(108 - Math.max(...gest.orig.map(q => q.p)), dp));
-        gest.orig.forEach(q => { q.m.s = q.s + dt; q.m.p = q.p + dp; }); }
+        gest.orig.forEach(q => { q.m.s = q.s + dt; q.m.p = st.scaleLock ? snapToScale(q.p + dp) : q.p + dp; }); }
       if (gest.n.p !== gest.lp) { gest.lp = gest.n.p; audition(trk(), gest.n.p, gest.n.v, 200); }
     } else {
       const g = st.grid > 1 ? st.grid : 1, ne = Math.max(o.s + g, st.grid > 1 ? snapT(R.s + o.s + o.d + raw) - R.s : Math.round(o.s + o.d + raw)), dd = ne - (o.s + o.d);
@@ -3725,7 +3745,8 @@ function tapEmpty(x, y) {
   if (other && !st.sel.size) { st.regId = other.id; renderBar(); draw(); toast("Clip actif : " + other.name); return; }
   if (st.sel.size) { st.sel.clear(); if (!st.pencil) { draw(); return; } }
   if (!st.pencil) { draw(); return; }
-  const p = pAtY(y); if (p == null) return;
+  let p = pAtY(y); if (p == null) return;
+  if (t.kind !== "drum" && st.scaleLock) p = snapToScale(p);
   const g = st.grid > 1 ? st.grid : 1, absS = Math.max(0, Math.floor(tick / g) * g);
   mark();
   const R = ensureReg(t, absS);
@@ -3739,12 +3760,21 @@ function selRect() {
   const xa = Math.min(rub.x0, rub.x1), xb = Math.max(rub.x0, rub.x1), ya = Math.min(rub.y0, rub.y1), yb = Math.max(rub.y0, rub.y1);
   st.sel.clear(); R.notes.forEach(n => { const nx = rx(R.s + n.s), w = n.d * st.ppt, ny = ry(n.p); if (nx < xb && nx + w > xa && ny < yb && ny + rowH() > ya) st.sel.add(n.i); });
 }
-function velAt(x, y) {
+function velAt(x, y) { velSweep(x, y, x, y); }
+function velSweep(x0, y0, x1, y1) {
   const R = activeReg(); if (!R) return;
-  const y0 = rollTop() + gridH(), vh = VLH(), v = Math.max(1, Math.min(127, Math.round((y0 + vh - 3 - y) / (vh - 8) * 127)));
-  const near = R.notes.filter(n => Math.abs(rx(R.s + n.s) - x) < 9);
-  const tgt = near.some(n => st.sel.has(n.i)) ? near.filter(n => st.sel.has(n.i)) : near;
-  tgt.forEach(n => { n.v = v; }); if (tgt.length) st.vel = v; draw();
+  const top = rollTop() + gridH(), vh = VLH();
+  const vOf = Y => Math.max(1, Math.min(127, Math.round((top + vh - 3 - Y) / (vh - 8) * 127)));
+  const xa = Math.min(x0, x1) - 8, xb = Math.max(x0, x1) + 8, dx = x1 - x0;
+  const near = R.notes.filter(n => { const nx = rx(R.s + n.s); return nx >= xa && nx <= xb; });
+  const tgt = st.sel.size && near.some(n => st.sel.has(n.i)) ? near.filter(n => st.sel.has(n.i)) : near;
+  tgt.forEach(n => {
+    const nx = rx(R.s + n.s);
+    const k = Math.abs(dx) > 1 ? Math.max(0, Math.min(1, (nx - x0) / dx)) : 1;
+    n.v = vOf(y0 + (y1 - y0) * k);
+  });
+  if (tgt.length) st.vel = vOf(y1);
+  draw();
 }
 
 // ------------------------------------------------------------------ gestes : vue Pistes (clips, redim/boucle, sections)
@@ -3936,12 +3966,266 @@ kbPointer(el("stKb"), "[data-p]"); kbPointer(el("stPads"), "[data-p]");
 // ------------------------------------------------------------------ édition
 let clip = null;
 const selNotes = () => { const R = activeReg(); return R ? R.notes.filter(n => st.sel.has(n.i)) : []; };
-function doQuant() {
+function doQuant(str = st.qStr ?? 100, sw = st.qSw ?? 0) {
   const R = activeReg(); if (!R) return;
   const ns = st.sel.size ? selNotes() : R.notes, g = st.grid > 1 ? st.grid : 24; if (!ns.length) return;
-  mark(); ns.forEach(n => { n.s = Math.max(0, snapT(R.s + n.s, g) - R.s); if (trk().kind !== "drum") n.d = Math.max(g, snapT(n.d, g)); }); growReg(R); R.notes.sort((a, b) => a.s - b.s);
-  toast(`Quantifié à la grille ${(GRIDS.find(x => x[1] === g) || ["1/16"])[0]} (${ns.length} notes)`); changed();
+  const k = Math.max(0, Math.min(1, str / 100)), swT = g * (sw / 100) * 0.66;
+  mark();
+  ns.forEach(n => {
+    const abs = R.s + n.s, stepIdx = Math.round(abs / g);
+    const target = stepIdx * g + (stepIdx % 2 === 1 ? swT : 0);
+    n.s = Math.max(0, Math.round(abs + (target - abs) * k) - R.s);
+    if (trk().kind !== "drum" && k >= 0.99 && !sw) n.d = Math.max(g, snapT(n.d, g));
+  });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s);
+  toast(`Quantifié ${(GRIDS.find(x => x[1] === g) || ["1/16"])[0]} · ${str}%${sw ? " · swing " + sw + "%" : ""} (${ns.length} notes)`);
+  changed();
 }
+function snapToScale(p) {
+  const sc = scalePcs();
+  if (sc.has(p % 12)) return p;
+  for (let d = 1; d <= 6; d++) {
+    if (p + d <= 108 && sc.has((p + d) % 12)) return p + d;
+    if (p - d >= 21 && sc.has((p - d) % 12)) return p - d;
+  }
+  return p;
+}
+function targetNotes() { const R = activeReg(); if (!R) return { R: null, ns: [] }; return { R, ns: st.sel.size ? selNotes() : R.notes }; }
+function midiHumanize(amt = 1) {
+  const { R, ns } = targetNotes(); if (!R || !ns.length) { toast("Aucune note à humaniser."); return; }
+  const dtMax = amt === 0 ? 4 : amt === 2 ? 12 : 7, dvMax = amt === 0 ? 6 : amt === 2 ? 18 : 11;
+  mark();
+  ns.forEach(n => {
+    const ds = Math.round((Math.random() * 2 - 1) * dtMax);
+    n.s = Math.max(0, n.s + ds);
+    n.v = Math.max(12, Math.min(127, n.v + Math.round((Math.random() * 2 - 1) * dvMax)));
+    if (trk().kind !== "drum") n.d = Math.max(6, Math.round(n.d * (1 + (Math.random() * 2 - 1) * 0.04 * (amt + 1))));
+  });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s); changed(); toast(`Humanisé (${ns.length} notes).`);
+}
+function midiLegato() {
+  const { R, ns } = targetNotes(); if (!R || !ns.length) return;
+  const starts = [...new Set(ns.map(n => n.s))].sort((a, b) => a - b);
+  mark();
+  ns.forEach(n => {
+    const idx = starts.indexOf(n.s);
+    const next = idx >= 0 && idx + 1 < starts.length ? starts[idx + 1] : R.d;
+    if (next > n.s) n.d = Math.max(6, next - n.s - 2);
+  });
+  growReg(R); changed(); toast(`Légato appliqué (${ns.length} notes).`);
+}
+function midiDurOp(mode) {
+  const { R, ns } = targetNotes(); if (!R || !ns.length) return;
+  const g = st.grid > 1 ? st.grid : 24;
+  mark();
+  ns.forEach(n => {
+    if (mode === "stacc") n.d = Math.max(6, Math.round(n.d * 0.5));
+    else if (mode === "half") n.d = Math.max(6, Math.round(n.d * 0.5));
+    else if (mode === "dbl") n.d = Math.round(n.d * 2);
+    else if (mode === "eq") n.d = g;
+  });
+  growReg(R); changed(); toast("Durées ajustées.");
+}
+function midiVelOp(mode) {
+  const { R, ns } = targetNotes(); if (!R || !ns.length) return;
+  const sorted = [...ns].sort((a, b) => a.s - b.s);
+  const s0 = sorted[0].s, s1 = sorted[sorted.length - 1].s, span = Math.max(1, s1 - s0);
+  const avg = Math.round(ns.reduce((a, n) => a + n.v, 0) / ns.length);
+  mark();
+  ns.forEach(n => {
+    const k = (n.s - s0) / span;
+    if (mode === "cresc") n.v = Math.round(42 + 78 * k);
+    else if (mode === "decresc") n.v = Math.round(120 - 78 * k);
+    else if (mode === "eq") n.v = st.vel;
+    else if (mode === "comp") n.v = Math.max(1, Math.min(127, Math.round(avg + (n.v - avg) * 0.5)));
+  });
+  changed(); toast("Vélocités transformées.");
+}
+function midiScaleQuant() {
+  const { R, ns } = targetNotes(); if (!R || !ns.length || trk().kind === "drum") return;
+  mark(); let ch = 0;
+  ns.forEach(n => { const np = snapToScale(n.p); if (np !== n.p) { n.p = np; ch++; } });
+  changed(); toast(ch ? `${ch} note(s) pliée(s) à ${keyName()}.` : `Toutes les notes sont déjà dans ${keyName()}.`);
+}
+function midiRetro() {
+  const { R, ns } = targetNotes(); if (!R || ns.length < 2) return;
+  const s0 = Math.min(...ns.map(n => n.s)), e0 = Math.max(...ns.map(n => n.s + n.d));
+  mark();
+  ns.forEach(n => { n.s = Math.max(0, s0 + e0 - (n.s + n.d)); });
+  R.notes.sort((a, b) => a.s - b.s); changed(); toast("Rétrograde appliqué.");
+}
+function midiInvert() {
+  const { R, ns } = targetNotes(); if (!R || ns.length < 2 || trk().kind === "drum") return;
+  const mid = Math.round((Math.min(...ns.map(n => n.p)) + Math.max(...ns.map(n => n.p))) / 2);
+  mark();
+  ns.forEach(n => { n.p = Math.max(21, Math.min(108, 2 * mid - n.p)); });
+  changed(); toast("Hauteurs inversées (miroir).");
+}
+function midiToolsBox() {
+  const t = trk(), { ns } = targetNotes(), scope = st.sel.size ? `${ns.length} notes sélectionnées` : `tout le clip (${ns.length} notes)`;
+  const g = (GRIDS.find(x => x[1] === st.grid) || GRIDS[4])[0];
+  box(`<h3>✨ Outils MIDI · ${esc(scope)}</h3>
+    <div class="lbl2">Quantification (grille ${g}) · Force & Swing</div>
+    <div class="chips"><span class="lbl2">Force</span>${[50, 75, 100].map(v => `<button class="pill ${st.qStr === v ? "on" : ""}" data-b="qStr" data-v="${v}">${v} %</button>`).join("")}
+      <span class="lbl2">Swing</span>${[0, 15, 25, 33, 50].map(v => `<button class="pill ${st.qSw === v ? "gold" : ""}" data-b="qSw" data-v="${v}">${v} %</button>`).join("")}
+      <button class="pill gold" data-b="qGo">⇥ Appliquer</button></div>
+    <div class="chips"><span class="lbl2">Humaniser</span>
+      <button class="pill" data-b="mHum" data-v="0">🎲 Doux</button>
+      <button class="pill" data-b="mHum" data-v="1">🎲 Moyen</button>
+      <button class="pill" data-b="mHum" data-v="2">🎲 Fort</button></div>
+    <div class="chips"><span class="lbl2">Durées</span>
+      <button class="pill" data-b="mLeg">⁀ Légato forcé</button>
+      <button class="pill" data-b="mDur" data-v="stacc">✂️ Staccato (×½)</button>
+      <button class="pill" data-b="mDur" data-v="dbl">×2 Allonger</button>
+      <button class="pill" data-b="mDur" data-v="eq">Égaliser (${g})</button></div>
+    <div class="chips"><span class="lbl2">Vélocités</span>
+      <button class="pill" data-b="mVel" data-v="cresc">📈 Crescendo</button>
+      <button class="pill" data-b="mVel" data-v="decresc">📉 Decrescendo</button>
+      <button class="pill" data-b="mVel" data-v="comp">Compresser écarts</button>
+      <button class="pill" data-b="mVel" data-v="eq">Égaliser (${st.vel})</button></div>
+    ${t.kind === "drum" ? "" : `<div class="chips"><span class="lbl2">Hauteur & Gamme (${esc(keyName())})</span>
+      <button class="pill on" data-b="mScale">🎼 Plier à la gamme</button>
+      <button class="pill" data-b="mInv">⇅ Miroir</button>
+      <button class="pill" data-b="mRet">⇄ Rétrograde</button></div>`}
+    <div class="lbl2" style="white-space:normal">Astuce : tu peux aussi glisser le doigt dans la piste Vélocité en bas du Piano roll pour dessiner une courbe continue.</div>
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+
+// ------------------------------------------------------------------ Step Sequencer batterie 16 pas (façon Logic Step Sequencer)
+const SEQ_ROWS_MAIN = [36, 38, 39, 42, 46, 51, 45, 48];
+const SEQ_PRESETS = {
+  Pop:    { 36: [0, 6, 8], 38: [4, 12], 42: [0, 2, 4, 6, 8, 10, 12, 14] },
+  Rock:   { 36: [0, 8, 10], 38: [4, 12], 42: [0, 2, 4, 6, 8, 10, 12, 14], 49: [0] },
+  Funk:   { 36: [0, 7, 10], 38: [4, 12, 15], 42: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
+  House:  { 36: [0, 4, 8, 12], 39: [4, 12], 46: [2, 6, 10, 14], 42: [0, 1, 3, 4, 5, 7, 8, 9, 11, 12, 13, 15] },
+  HipHop: { 36: [0, 7, 10], 38: [4, 12], 42: [0, 2, 4, 6, 8, 10, 12, 14], 46: [14] },
+  Trap:   { 36: [0, 7, 10], 38: [8], 39: [8], 42: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] }
+};
+const SEQ_VELS = [0, 96, 124, 48];
+const seqLvl = v => !v ? 0 : v >= 115 ? 3 : v <= 60 ? 1 : 2;
+function seqCellFind(R, p, barOff, step) {
+  const s16 = Math.round(barT() / 16), t0 = barOff + step * s16;
+  return R.notes.find(n => n.p === p && Math.abs(n.s - t0) < s16 * 0.45);
+}
+function seqSetCell(p, step, lvl, playHit) {
+  const t = trk(); if (!t || t.kind !== "drum") return;
+  const R = ensureReg(t, st.cur), bt = barT(), s16 = Math.round(bt / 16);
+  const barOff = st.seqBar * bt, t0 = barOff + step * s16;
+  const old = seqCellFind(R, p, barOff, step);
+  if (lvl === 0) {
+    if (old) R.notes = R.notes.filter(n => n !== old);
+  } else {
+    const v = SEQ_VELS[lvl];
+    if (old) { old.v = v; old.s = t0; }
+    else { R.notes.push({ p, s: t0, d: Math.min(24, s16), v, i: nid++ }); }
+    if (playHit) audition(t, p, v, 100);
+  }
+  growReg(R); R.notes.sort((a, b) => a.s - b.s);
+}
+function seqApplyPreset(nm) {
+  const t = trk(); if (!t || t.kind !== "drum") return;
+  mark();
+  const R = ensureReg(t, st.cur), bt = barT(), barOff = st.seqBar * bt, s16 = Math.round(bt / 16);
+  R.notes = R.notes.filter(n => n.s < barOff || n.s >= barOff + bt);
+  const pat = SEQ_PRESETS[nm];
+  if (pat) Object.entries(pat).forEach(([ps, steps]) => {
+    const p = +ps;
+    steps.forEach(k => R.notes.push({ p, s: barOff + k * s16, d: Math.min(24, s16), v: k % 4 === 0 ? 115 : 88, i: nid++ }));
+  });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s);
+  changed(); renderSeq(); toast(pat ? `Motif ${nm} posé (mesure ${st.seqBar + 1}).` : `Mesure ${st.seqBar + 1} vidée.`);
+}
+function seqVariation() {
+  const t = trk(); if (!t || t.kind !== "drum") return;
+  mark();
+  const R = ensureReg(t, st.cur), bt = barT(), barOff = st.seqBar * bt, s16 = Math.round(bt / 16);
+  // Ajoute 2-3 ghost notes subtiles (caisse claire / charley ouvert / shaker) sur des pas vides.
+  const cands = [[38, [3, 7, 9, 15], 46], [46, [6, 14], 72], [70, [1, 5, 9, 13], 52]];
+  let added = 0;
+  cands.forEach(([p, ks, v]) => {
+    const k = ks[Math.floor(Math.random() * ks.length)];
+    if (!seqCellFind(R, p, barOff, k)) { R.notes.push({ p, s: barOff + k * s16, d: Math.min(24, s16), v, i: nid++ }); added++; }
+  });
+  growReg(R); R.notes.sort((a, b) => a.s - b.s); changed(); renderSeq(); toast(`Variation ajoutée (+${added} coups).`);
+}
+function renderSeq() {
+  const Q = el("stSeq"), t = trk();
+  const on = !!(st.seq && t && t.kind === "drum");
+  Q.classList.toggle("on", on);
+  if (!on) return;
+  const R = activeReg(t), bt = barT(), bars = R ? Math.max(1, Math.round(R.d / bt)) : 1;
+  if (st.seqBar >= bars) st.seqBar = 0;
+  const barOff = st.seqBar * bt;
+  const rows = st.seqAll ? DR.slice().reverse() : SEQ_ROWS_MAIN.map(p => DR[DRI[p]]).filter(Boolean);
+  Q.innerHTML = `<div class="strow" style="padding:0 0 3px">
+      <span class="lbl2" style="color:var(--gold);font-weight:800">⊞ SÉQ. 16 PAS</span>
+      <button class="pill" data-sq="b-">◀</button><span class="lbl2">Mes. ${st.seqBar + 1}/${bars}</span><button class="pill" data-sq="b+">▶</button>
+      ${Object.keys(SEQ_PRESETS).map(k => `<button class="pill" data-sq="pre" data-v="${k}">${k}</button>`).join("")}
+      <button class="pill" data-sq="var">🎲 Varier</button>
+      <button class="pill" data-sq="clr">⌫ Vider</button>
+      <button class="pill ${st.seqAll ? "on" : ""}" data-sq="all">${st.seqAll ? "8 élém." : "12 élém."}</button>
+      <button class="pill" data-sq="close">✕</button></div>
+    <div class="sqhdr"><span></span>${Array.from({ length: 16 }, (_, k) => `<span>${k % 4 === 0 ? `<b>${k / 4 + 1}</b>` : "·"}</span>`).join("")}</div>
+    <div class="sqgrid" id="stSeqGrid">${rows.map(([p, , nm]) => `<div class="sqrow">
+      <button class="snm" data-sqa="${p}">${esc(nm)}</button>
+      ${Array.from({ length: 16 }, (_, k) => {
+        const hit = R ? seqCellFind(R, p, barOff, k) : null, lv = hit ? seqLvl(hit.v) : 0;
+        return `<div class="sqc ${Math.floor(k / 4) % 2 ? "" : "b1"} ${lv ? "v" + lv : ""}" data-p="${p}" data-k="${k}"></div>`;
+      }).join("")}</div>`).join("")}</div>
+    <div class="lbl2">Toucher : cycle normal → fort (or) → doux → effacé · Glisser : peindre une ligne.</div>`;
+}
+let seqCurCol = -1;
+function seqPlayhead(pos) {
+  const G = el("stSeqGrid"); if (!G) return;
+  const R = activeReg(), bt = barT();
+  let col = -1;
+  if (R && pos >= R.s && pos < regEnd(R)) {
+    const rel = (pos - R.s) % R.d;
+    if (rel >= st.seqBar * bt && rel < (st.seqBar + 1) * bt) col = Math.floor((rel - st.seqBar * bt) / (bt / 16));
+  }
+  if (col === seqCurCol) return;
+  if (seqCurCol >= 0) G.querySelectorAll(`.sqc[data-k="${seqCurCol}"]`).forEach(c => c.classList.remove("cur"));
+  seqCurCol = col;
+  if (col >= 0) G.querySelectorAll(`.sqc[data-k="${col}"]`).forEach(c => c.classList.add("cur"));
+}
+let sqPaint = null;
+el("stSeq").addEventListener("pointerdown", e => {
+  const aud = e.target.closest("[data-sqa]");
+  if (aud) { audition(trk(), +aud.dataset.sqa, 100, 120); return; }
+  const c = e.target.closest(".sqc"); if (!c) return;
+  e.preventDefault(); el("stSeq").setPointerCapture?.(e.pointerId);
+  const p = +c.dataset.p, k = +c.dataset.k;
+  const curLv = c.classList.contains("v3") ? 3 : c.classList.contains("v2") ? 2 : c.classList.contains("v1") ? 1 : 0;
+  const nextLv = [2, 0, 3, 1][curLv]; // Off→Normal(2)→Fort(3)→Doux(1)→Off(0)
+  mark(); seqSetCell(p, k, nextLv, true);
+  sqPaint = { id: e.pointerId, lv: nextLv, seen: new Set([p + ":" + k]) };
+  c.classList.remove("v1", "v2", "v3"); if (nextLv) c.classList.add("v" + nextLv);
+  changed();
+});
+el("stSeq").addEventListener("pointermove", e => {
+  if (!sqPaint || e.pointerId !== sqPaint.id) return;
+  const target = document.elementFromPoint(e.clientX, e.clientY), c = target && target.closest(".sqc");
+  if (!c) return;
+  const p = +c.dataset.p, k = +c.dataset.k, key = p + ":" + k;
+  if (sqPaint.seen.has(key)) return;
+  sqPaint.seen.add(key);
+  seqSetCell(p, k, sqPaint.lv, false);
+  c.classList.remove("v1", "v2", "v3"); if (sqPaint.lv) c.classList.add("v" + sqPaint.lv);
+  changed();
+});
+const sqUp = e => { if (sqPaint && e.pointerId === sqPaint.id) sqPaint = null; };
+el("stSeq").addEventListener("pointerup", sqUp); el("stSeq").addEventListener("pointercancel", sqUp);
+el("stSeq").addEventListener("click", e => {
+  const b = e.target.closest("[data-sq]"); if (!b) return;
+  const a = b.dataset.sq;
+  if (a === "close") { st.seq = false; render(); }
+  else if (a === "all") { st.seqAll = !st.seqAll; renderSeq(); }
+  else if (a === "b-") { st.seqBar = Math.max(0, st.seqBar - 1); renderSeq(); }
+  else if (a === "b+") { const R = activeReg(); const maxB = R ? Math.max(0, Math.ceil(R.d / barT()) - 1) : 0; st.seqBar = Math.min(maxB + 1, st.seqBar + 1); renderSeq(); }
+  else if (a === "pre") seqApplyPreset(b.dataset.v);
+  else if (a === "var") seqVariation();
+  else if (a === "clr") seqApplyPreset(null);
+});
 function doCopy() { const ns = selNotes(); if (!ns.length) { toast("Sélectionne des notes (toucher, ou appui long puis glisser)."); return; }
   const s0 = Math.min(...ns.map(n => n.s)); clip = { kind: trk().kind, notes: ns.map(n => ({ p: n.p, s: n.s - s0, d: n.d, v: n.v })), len: Math.max(...ns.map(n => n.s + n.d)) - s0 };
   toast(`${ns.length} notes copiées`); }
@@ -4534,6 +4818,16 @@ el("stBox").addEventListener("click", e => {
   else if (a === "fxCompOn") { const t = P.tracks[ti]; if (t) { fxOf(t).compOn = !fxOf(t).compOn; mixAll(); storeSoon(); fxBox(ti); renderMixer(); } }
   else if (a === "dlyOpen") dlyBox();
   else if (a === "dlyDiv") { dlyCfg().div = +b.dataset.v; updateDelay(); storeSoon(); dlyBox(); renderMixer(); }
+  else if (a === "qStr") { st.qStr = +b.dataset.v; midiToolsBox(); }
+  else if (a === "qSw") { st.qSw = +b.dataset.v; midiToolsBox(); }
+  else if (a === "qGo") { closeBox(); doQuant(st.qStr, st.qSw); }
+  else if (a === "mHum") { closeBox(); midiHumanize(+b.dataset.v); }
+  else if (a === "mLeg") { closeBox(); midiLegato(); }
+  else if (a === "mDur") { closeBox(); midiDurOp(b.dataset.v); }
+  else if (a === "mVel") { closeBox(); midiVelOp(b.dataset.v); }
+  else if (a === "mScale") { closeBox(); midiScaleQuant(); }
+  else if (a === "mInv") { closeBox(); midiInvert(); }
+  else if (a === "mRet") { closeBox(); midiRetro(); }
   else if (a === "pickT") { st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
 });
 
@@ -4550,7 +4844,10 @@ root.addEventListener("click", e => {
     case "stop": stopPlay(); renderTop(); draw(); break;
     case "loop": P.loop.on = !P.loop.on; if (P.loop.on && !(P.loop.b > P.loop.a)) { P.loop.a = 0; P.loop.b = songEnd(); } storeSoon(); renderTop(); draw(); break;
     case "metro": st.metro = !st.metro; renderTop(); break;
-    case "mix": st.mix = !st.mix; if (st.mix) st.step = false; render(); break;
+    case "mix": st.mix = !st.mix; if (st.mix) { st.step = false; st.seq = false; } render(); break;
+    case "seq": st.seq = !st.seq; if (st.seq) { st.mix = false; st.step = false; } render(); break;
+    case "scaleLock": st.scaleLock = !st.scaleLock; renderBar(); toast(st.scaleLock ? `Gamme verrouillée (${keyName()}) : impossible de poser une note hors gamme.` : "Verrouillage de gamme désactivé."); break;
+    case "midiTools": midiToolsBox(); break;
     case "sections": sectionsBox(); break;
     case "splitReg": splitAtCur(false); break;
     case "loopReg": { const r = activeReg(); if (!r) break; if ((r.rep || 1) === 1) { mark(); r.rep = 2; changed(); render(); toast("Clip bouclé ×2 (glisse son bord droit ou touche 🔁 pour ajuster)."); } else clipBox(); break; }
@@ -4587,7 +4884,7 @@ root.addEventListener("click", e => {
     case "vol-": case "vol+": { const t = P.tracks[ti]; t.vol = Math.max(0, Math.min(127, t.vol + (a === "vol+" ? 8 : -8))); mixAll(); storeSoon(); renderHeads(); break; }
     case "volv": volBox(ti); break;
     case "pickTrk": trkPickBox(); break;
-    case "step": st.step = !st.step; if (st.step) st.mix = false; grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
+    case "step": st.step = !st.step; if (st.step) { st.mix = false; st.seq = false; } grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
     case "pencil": st.pencil = !st.pencil; renderBar(); toast(st.pencil ? "Crayon : un toucher dans la grille pose une note." : "Crayon retiré : un toucher dans la grille ne pose rien."); break;
     case "grid": gridBox(); break;
     case "quant": doQuant(); break;
@@ -4625,7 +4922,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll, doQuant, midiHumanize, midiLegato, midiDurOp, midiVelOp, midiScaleQuant, midiRetro, midiInvert, midiToolsBox, seqApplyPreset, seqVariation, seqSetCell, renderSeq },
 };
 return api;
 })();
