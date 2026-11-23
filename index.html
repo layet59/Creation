@@ -2605,8 +2605,9 @@ function busOf(t) {
   let b = tBus.get(t.id);
   if (!b) { const g = ac.createGain(), pn = ac.createStereoPanner ? ac.createStereoPanner() : null, sendG = ac.createGain();
     if (pn) { g.connect(pn); pn.connect(master); } else g.connect(master);
-    sendG.gain.value = 0.5; g.connect(sendG); sendG.connect(revSend);
-    b = { g, pn }; tBus.set(t.id, b); }
+    g.connect(sendG); sendG.connect(revSend);
+    b = { g, pn, sendG }; tBus.set(t.id, b); }
+  b.sendG.gain.value = (t.rev ?? 50) / 100;
   const aud = audible(t);
   b.g.gain.value = aud ? Math.pow(t.vol / 100, 2) * (t.kind === "drum" ? 0.55 : 1.1) : 0;
   if (b.pn) b.pn.pan.value = t.pan || 0;
@@ -2777,6 +2778,14 @@ const css = `
 .sth .bt button { border:0; border-radius:7px; font:700 11px system-ui; padding:3px 7px; color:var(--fg); background:rgba(255,255,255,.1); }
 .sth .bt button.m.on { background:#e5534b; } .sth .bt button.s.on { background:#f5b342; color:#111; }
 .sth .bar { position:absolute; left:0; top:0; bottom:0; width:4px; }
+#stMix { flex-shrink:0; display:none; flex-direction:column; gap:1px; max-height:48%; overflow-y:auto; touch-action:pan-y; border-top:1px solid rgba(74,144,217,.6); background:#111a28; padding:4px 6px 6px; }
+#stMix.on { display:flex; }
+.mxr { display:grid; grid-template-columns:minmax(60px,1.1fr) 3fr 2fr 2fr auto; gap:6px; align-items:center; padding:3px 0 3px 7px; border-left:4px solid transparent; }
+.mxr .n { font:700 12px system-ui; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mxr label { display:flex; flex-direction:column; font:600 9px system-ui; color:var(--muted); gap:0; }
+.mxr input { width:100%; margin:0; height:26px; }
+.mxr .b { display:flex; gap:4px; } .mxr .b button { border:0; border-radius:7px; font:700 12px system-ui; padding:6px 9px; color:var(--fg); background:rgba(255,255,255,.1); }
+.mxr .b button.m.on { background:#e5534b; } .mxr .b button.s.on { background:#f5b342; color:#111; }
 #stStep { flex-shrink:0; display:none; flex-direction:column; gap:2px; border-top:1px solid rgba(245,179,66,.5); background:rgba(245,179,66,.05); padding-bottom:4px; }
 #stStep.on { display:flex; }
 #stKb { position:relative; height:112px; margin:2px 6px 0; touch-action:none; }
@@ -2796,7 +2805,7 @@ const css = `
 #stBox .it .g { flex:1; min-width:0; font:600 13px system-ui; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #stBox input[type=text] { flex:1; min-width:0; font:600 15px system-ui; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:#0d1420; color:var(--fg); }
 #stBox .chips { display:flex; gap:5px; flex-wrap:wrap; }
-#stToast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); z-index:7; background:#26364f; color:var(--fg); font:600 13px system-ui; padding:9px 14px; border-radius:12px; display:none; box-shadow:0 4px 18px rgba(0,0,0,.5); }
+#stToast { position:fixed; left:50%; top:100px; transform:translateX(-50%); z-index:7; background:#26364f; color:var(--fg); font:600 13px system-ui; padding:9px 14px; border-radius:12px; display:none; box-shadow:0 4px 18px rgba(0,0,0,.5); }
 `;
 document.head.insertAdjacentHTML("beforeend", `<style>${css}</style>`);
 document.body.insertAdjacentHTML("beforeend", `
@@ -2804,6 +2813,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <div class="strow" id="stTop"></div>
   <div class="strow" id="stBar"></div>
   <div id="stMain"><canvas id="stArrCv"></canvas><div id="stHeads"></div><canvas id="stCv" style="display:none"></canvas></div>
+  <div id="stMix"></div>
   <div id="stStep">
     <div class="strow" id="stStepA"></div>
     <div class="strow" id="stStepB"></div>
@@ -2837,6 +2847,7 @@ function renderTop() {
     <button class="pill" data-a="stop">⏹</button>
     <span id="stPos"></span>
     <button class="pill ${P.loop.on ? "gold" : ""}" data-a="loop">🔁</button>
+    <button class="pill ${st.mix ? "gold" : ""}" data-a="mix">🎚 Mixeur</button>
     <button class="pill ${st.metro ? "on" : ""}" data-a="metro">🥁 Métro.</button>
     <button class="pill" data-a="bpm-">−</button><button class="pill" data-a="bpm">♩ ${P.bpm}</button><button class="pill" data-a="bpm+">+</button>
     <button class="pill" data-a="undo" ${undoS.length ? "" : 'style="opacity:.4"'}>↶</button>
@@ -2850,6 +2861,7 @@ function renderBar() {
   if (st.view === "arr") {
     el("stBar").innerHTML = `
       <button class="pill gold" data-a="suite">⇩ Suite…</button>
+      <button class="pill" data-a="durs">⏱ Durée des accords</button>
       <button class="pill" data-a="melo">🎲 Autre mélodie</button>
       <button class="pill on" data-a="roll">✎ Piano roll</button>
       <button class="pill" data-a="addInst">＋ Instrument</button>
@@ -2926,7 +2938,7 @@ function buildKb() {
 }
 function render() {
   if (!P) return;
-  renderTop(); renderBar(); renderHeads(); renderStep();
+  renderTop(); renderBar(); renderHeads(); renderStep(); renderMixer();
   cv.style.display = st.view === "roll" ? "" : "none"; acv.style.display = st.view === "arr" ? "" : "none";
   resize();
 }
@@ -3107,7 +3119,7 @@ cv.addEventListener("pointerdown", e => {
   }
   if (ptrs.size > 2) return;
   const gh = gridH();
-  if (y < RH) { gest = { kind: "ruler", x0: x, x, moved: false }; return; }
+  if (y < RH) { gest = { kind: "ruler", x0: x, y0: y, x, moved: false }; return; }
   if (y > RH + gh) { mark(); gest = { kind: "vel" }; velAt(x, y); return; }
   if (x < KW) { const p = pAtY(y); if (p != null) { kbDown = p; gest = { kind: "kb", p, vo: audition(trk(), p, 90, 0) }; draw(); } return; }
   const hit = noteAt(x, y);
@@ -3170,7 +3182,8 @@ function endPtr(e) {
   if (!gest) return;
   if (gest.kind === "pinch") { if (ptrs.size === 0) gest = null; return; }
   const G = gest; gest = null;
-  if (G.kind === "ruler") { if (!G.moved) { st.cur = Math.max(0, snapT(tAtX(G.x0), st.grid > 1 ? st.grid : 1)); stepOps = []; posLbl(); } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "ruler") { if (!G.moved && G.y0 > 22 && chordTap(tAtX(G.x0))) return;
+    if (!G.moved) { st.cur = Math.max(0, snapT(tAtX(G.x0), st.grid > 1 ? st.grid : 1)); stepOps = []; posLbl(); } else storeSoon(); renderTop(); draw(); return; }
   if (G.kind === "vel") { changed(); return; }
   if (G.kind === "kb") { kbStop(); return; }
   if (G.kind === "rub") { rub = null; draw(); renderBar(); return; }
@@ -3218,7 +3231,7 @@ acv.addEventListener("pointerdown", e => {
   ptrs.set(e.pointerId, { x, y });
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; ag = { kind: "pinch", d: Math.abs(a.x - b.x), c: (a.x + b.x) / 2, appt: st.appt, ax0: st.ax0 }; return; }
   if (x < HW) return;
-  if (y < ARH) { ag = { kind: "ruler", x0: x, moved: false }; return; }
+  if (y < ARH) { ag = { kind: "ruler", x0: x, y0: y, moved: false }; return; }
   ag = { kind: "pan", x0: x, y0: y, sx: st.ax0, sy: st.ay, moved: false, ti: Math.floor((y - ARH + st.ay) / ATH()) };
 });
 acv.addEventListener("pointermove", e => {
@@ -3238,7 +3251,8 @@ function endA(e) {
   if (!ag) return; if (ag.kind === "pinch") { if (!ptrs.size) ag = null; return; }
   const G = ag; ag = null; if (e.type === "pointercancel") return;
   const atx = X => st.ax0 + (X - HW) / st.appt;
-  if (G.kind === "ruler") { if (!G.moved) { st.cur = Math.max(0, Math.round(atx(G.x0) / TPQ) * TPQ); stepOps = []; } else storeSoon(); renderTop(); draw(); return; }
+  if (G.kind === "ruler") { if (!G.moved && G.y0 > 22 && chordTap(atx(G.x0))) return;
+    if (!G.moved) { st.cur = Math.max(0, Math.round(atx(G.x0) / TPQ) * TPQ); stepOps = []; } else storeSoon(); renderTop(); draw(); return; }
   if (G.kind === "pan" && !G.moved) {
     const ti = G.ti; if (ti < 0 || ti >= P.tracks.length) return;
     const now = performance.now(), dbl = lastTap.i === "a" + ti && now - lastTap.t < 380;
@@ -3426,18 +3440,19 @@ function genMelody(spans, s0, end, scalePcsSet, seed, lo = 64, hi = 81) {
   }
   return out;
 }
-let lastImp = null;
 function importSuite(o) {
   // o : { si (suite), per (mesures par accord ; 0 = durées de la suite), bass, drums, style, melo, rhy, key }
   const su = SUITES[o.si] || null;
-  const chs = su ? su.chords : [0, 5, 3, 4].map(k => ({ ...degChords()[k], d: 4 }));
-  if (su && o.key) { const m = D.modes.find(x => x.id === su.mode); P.key = { root: su.root, rootL: su.rootL, mode: m ? su.mode : P.key.mode, stack: P.key.stack }; }
-  const s0 = Math.floor(st.cur / barT()) * barT();
-  let T = s0; const spans = chs.map(c => { const len = o.per ? Math.round(o.per * barT()) : Math.round(c.d * TPQ); const sp2 = { c, s: T, e: T + len }; T += len; return sp2; });
+  const chs = o.chords || (su ? su.chords : [0, 5, 3, 4].map(k => ({ ...degChords()[k], d: 4 })));
+  if (su && o.key && !o.chords) { const m = D.modes.find(x => x.id === su.mode); P.key = { root: su.root, rootL: su.rootL, mode: m ? su.mode : P.key.mode, stack: P.key.stack }; }
+  const s0 = o.s0 ?? Math.floor(st.cur / barT()) * barT();
+  let T = s0; const spans = chs.map(c => { const len = o.per && !o.chords ? Math.round(o.per * barT()) : Math.round(c.d * TPQ); const sp2 = { c, s: T, e: T + len }; T += len; return sp2; });
   const end = T;
   mark();
+  const seed = o.seed || (Date.now() & 0xffffff);
   const find = (nm, kind, snd) => { let t = P.tracks.find(x => x.name === nm && x.kind === kind); if (!t) { t = mkTrack(nm, kind, snd, P.tracks.length); P.tracks.push(t); } return t; };
-  const clear = t => { t.notes = t.notes.filter(n => n.s < s0 || n.s >= end); };
+  const cEnd = Math.max(end, o.clearTo || 0);
+  const clear = t => { t.notes = t.notes.filter(n => n.s < s0 || n.s >= cEnd); };
   const pat = o.drums || o.rhy || o.bass ? stylePat(o.style || S.style || "pop") : null;
   const tiles = fn => { for (let b = s0; b < end; b += pat.len) fn(b); };
   // Accords : tenus, ou rythmés comme le style choisi.
@@ -3454,20 +3469,24 @@ function importSuite(o) {
   if (o.drums) { const td = P.tracks.find(x => x.kind === "drum") || (() => { const t = mkTrack("Batterie", "drum", null, P.tracks.length); t.kit = S.kit || "synth"; P.tracks.push(t); return t; })(); clear(td);
     tiles(b => pat.hits.forEach(h => { const t0 = b + h.t; if (t0 < end && KIND_GM[h.kind]) td.notes.push({ p: KIND_GM[h.kind], s: t0, d: 24, v: Math.max(1, Math.min(127, Math.round(115 * h.v))), i: nid++ }); })); }
   if (o.melo) { const tm = find("Mélodie", "inst", S.tSolo || "hq:flute"); clear(tm);
-    const seed = o.seed || (Date.now() & 0xffff); genMelody(spans, s0, end, scalePcs(), seed).forEach(n => tm.notes.push({ ...n, i: nid++ })); }
-  P.chords = (P.chords || []).filter(c => c.s < s0 || c.s >= end);
+    genMelody(spans, s0, end, scalePcs(), seed).forEach(n => tm.notes.push({ ...n, i: nid++ })); }
+  P.chords = (P.chords || []).filter(c => c.s < s0 || c.s >= cEnd);
   spans.forEach(x => P.chords.push({ s: x.s, d: x.e - x.s, n: cName(x.c) })); P.chords.sort((a, b) => a.s - b.s);
   P.tracks.forEach(t => t.notes.sort((a, b) => a.s - b.s));
   if (P.bars * barT() < end) P.bars = Math.ceil(end / barT());
   P.loop = { on: true, a: s0, b: end };
-  lastImp = { ...o, s0, end, spans };
-  st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.3, (acv.width / dpr - HW - 10) / Math.max(barT(), end)));
+  // La suite posée reste dans le projet : ses durées se changent ensuite (Durée des accords), tout se recale.
+  const oo = { ...o }; delete oo.chords; delete oo.s0; delete oo.clearTo; delete oo.seed;
+  P.suite = { chords: spans.map(x => ({ ...x.c, d: (x.e - x.s) / TPQ })), o: oo, s0, end, seed };
+  if (!o.keepView) { st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.3, (acv.width / dpr - HW - 10) / Math.max(barT(), end)));
+  }
   preloadAll(); changed(); render();
-  toast(`${chs.length} accords${o.bass ? " + basse" : ""}${o.drums ? " + batterie" : ""}${o.melo ? " + mélodie" : ""} · ${Math.round((end - s0) / barT())} mesures`);
+  if (!o.keepView) toast(`${chs.length} accords${o.bass ? " + basse" : ""}${o.drums ? " + batterie" : ""}${o.melo ? " + mélodie" : ""} · ${Math.round((end - s0) / barT())} mesures`);
 }
 // 🎲 : une autre mélodie sur la même suite (piste Mélodie, entre le début et la fin de la suite posée).
 function newMelody() {
-  const L = lastImp; if (!L) { toast("Pose d'abord une suite (⇩ Suite…)."); return; }
+  const L0 = P.suite; if (!L0) { toast("Pose d'abord une suite (⇩ Suite…)."); return; }
+  let T = L0.s0; const L = { s0: L0.s0, end: L0.end, spans: L0.chords.map(c => { const sp2 = { c, s: T, e: T + Math.round(c.d * TPQ) }; T = sp2.e; return sp2; }) };
   const tm = P.tracks.find(x => x.name === "Mélodie" && x.kind === "inst") || (() => { const t = mkTrack("Mélodie", "inst", S.tSolo || "hq:flute", P.tracks.length); P.tracks.push(t); return t; })();
   mark(); tm.notes = tm.notes.filter(n => n.s < L.s0 || n.s >= L.end);
   genMelody(L.spans, L.s0, L.end, scalePcs(), (Date.now() * 7) & 0xffffff).forEach(n => tm.notes.push({ ...n, i: nid++ }));
@@ -3537,6 +3556,54 @@ function kitBox(i) {
     `<button class="pill" data-b="close">Fermer</button>`);
 }
 function trkPickBox() { box(`<h3>Piste à éditer</h3>${P.tracks.map((t, i) => `<div class="it" style="border-left:4px solid ${t.color}"><span class="g">${esc(t.name)}</span><button class="pill ${i === st.trk ? "on" : ""}" data-b="pickT" data-ti="${i}">${i === st.trk ? "✓" : "Choisir"}</button></div>`).join("")}<button class="pill" data-b="close">Fermer</button>`); }
+// ------------------------------------------------------------------ mixeur (volume, panoramique, réverb, muet, solo)
+function renderMixer() {
+  const M = el("stMix"); M.classList.toggle("on", !!st.mix); if (!st.mix) return;
+  const row = (t, i) => `<div class="mxr" style="border-left-color:${t.color}"><span class="n">${esc(t.name)}</span>
+    <label>Volume ${t.vol}<input type="range" min="0" max="127" value="${t.vol}" data-mx="vol" data-ti="${i}"></label>
+    <label>Pan. ${t.pan ? (t.pan < 0 ? "G " : "D ") + Math.round(Math.abs(t.pan) * 100) : "centre"}<input type="range" min="-100" max="100" value="${Math.round((t.pan || 0) * 100)}" data-mx="pan" data-ti="${i}"></label>
+    <label>Réverb ${t.rev ?? 50}<input type="range" min="0" max="100" value="${t.rev ?? 50}" data-mx="rev" data-ti="${i}"></label>
+    <span class="b"><button class="m ${t.mute ? "on" : ""}" data-a="mute" data-ti="${i}">M</button><button class="s ${t.solo ? "on" : ""}" data-a="solo" data-ti="${i}">S</button></span></div>`;
+  M.innerHTML = P.tracks.map(row).join("") +
+    `<div class="mxr" style="border-left-color:#fff"><span class="n">Général</span>
+      <label>Volume ${S.vMax}<input type="range" min="0" max="100" value="${S.vMax}" data-mx="gvol"></label>
+      <label>Salle (réverb) ${S.vRev}<input type="range" min="0" max="100" value="${S.vRev}" data-mx="grev"></label><span></span><span></span></div>`;
+}
+el("stMix").addEventListener("input", e => {
+  const r = e.target.closest("[data-mx]"); if (!r) return; const k = r.dataset.mx, v = +r.value, t = P.tracks[+r.dataset.ti];
+  if (k === "vol") t.vol = v; else if (k === "pan") t.pan = Math.abs(v) < 4 ? 0 : v / 100; else if (k === "rev") t.rev = v;
+  else if (k === "gvol") { S.vMax = v; mix(); save(); } else if (k === "grev") { S.vRev = v; mix(); save(); }
+  mixAll(); storeSoon();
+  const lab = r.parentElement; lab.firstChild.textContent = { vol: "Volume " + v, pan: "Pan. " + (Math.abs(v) < 4 ? "centre" : (v < 0 ? "G " : "D ") + Math.abs(v)), rev: "Réverb " + v, gvol: "Volume " + v, grev: "Salle (réverb) " + v }[k];
+  if (k === "vol") renderHeads();
+});
+// ------------------------------------------------------------------ durée de chaque accord de la suite posée
+const DURS = () => { const n = P.num || 4; return [[1, "1 temps"], [n / 2, "½ mes."], [n * 3 / 4, "¾"], [n, "1 mes."], [n * 1.5, "1½"], [n * 2, "2 mes."]].filter((x, k, a) => Number.isInteger(x[0]) && a.findIndex(y => y[0] === x[0]) === k); };
+function relayout() {
+  const U = P.suite; importSuite({ ...U.o, chords: U.chords, s0: U.s0, clearTo: U.end, seed: U.seed, keepView: true });
+}
+function chordsBox(focus) {
+  const U = P.suite;
+  if (!U) { toast("Pose d'abord une suite (⇩ Suite…) : ses accords se règlent ici."); return; }
+  const n = P.num || 4, lab = d => d % n === 0 ? (d / n === 1 ? "1 mes." : d / n + " mes.") : d === n / 2 ? "½ mes." : d + " t.";
+  let T = U.s0;
+  const rows = U.chords.map((c, k) => { const bar = Math.floor(T / barT()) + 1, beat = Math.round((T % barT()) / TPQ) + 1; T += Math.round(c.d * TPQ);
+    return `<div class="it" id="stCh${k}" style="flex-wrap:wrap;${k === focus ? "outline:2px solid var(--gold)" : ""}"><span class="g" style="flex:0 0 auto;min-width:118px">${k + 1}. <b style="color:var(--gold)">${esc(cName(c))}</b> <span class="lbl2">m.${bar}${beat > 1 ? "·" + beat : ""}</span></span>
+      ${DURS().map(([d, l]) => `<button class="pill ${c.d === d ? "on" : ""}" data-b="cd" data-k="${k}" data-v="${d}" style="padding:5px 8px">${l}</button>`).join("")}
+      <span class="lbl2">${DURS().some(x => x[0] === c.d) ? "" : lab(c.d)}</span></div>`; }).join("");
+  box(`<h3>⏱ Durée des accords · ${esc(U.chords.length + " accords, " + Math.round((U.end - U.s0) / barT() * 10) / 10 + " mesures")}</h3>
+    <div class="lbl2" style="white-space:normal">Touche une durée : la suite se recale aussitôt (accords, basse, batterie, mélodie ; ↶ pour revenir). Les notes que tu as changées à la main sur ces mesures sont refaites.</div>
+    <div class="chips"><span class="lbl2">Tous les accords :</span>${DURS().map(([d, l]) => `<button class="pill" data-b="cdall" data-v="${d}" style="padding:5px 8px">${l}</button>`).join("")}</div>
+    ${rows}
+    <button class="pill" data-b="close">Fermer</button>`);
+  if (focus != null) { const r = el("stCh" + focus); if (r) el("stBoxIn").scrollTop = r.offsetTop - 120; }
+}
+// Toucher le nom d'un accord sur la règle : sa durée.
+function chordTap(tick) {
+  const U = P.suite; if (!U || tick < U.s0 || tick >= U.end) return false;
+  let T = U.s0; for (let k = 0; k < U.chords.length; k++) { const e = T + Math.round(U.chords[k].d * TPQ); if (tick < e) { chordsBox(k); return true; } T = e; }
+  return false;
+}
 function volBox(i) {
   const t = P.tracks[i];
   box(`<h3 style="color:${t.color}">Volume de « ${esc(t.name)} »</h3>
@@ -3567,6 +3634,10 @@ el("stBox").addEventListener("click", e => {
   else if (a === "trkClr") { mark(); P.tracks[ti].notes = []; changed(); closeBox(); render(); }
   else if (a === "trkDel") { if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Supprimer pour de bon ?"; return; }
     mark(); P.tracks.splice(ti, 1); st.trk = Math.max(0, Math.min(st.trk, P.tracks.length - 1)); if (!P.tracks.length) P.tracks.push(mkTrack("Mélodie", "inst", S.tSolo, 0)); changed(); closeBox(); st.view = "arr"; render(); }
+  else if (a === "cd" || a === "cdall") {
+    const sc = el("stBoxIn").scrollTop, U = P.suite, v = +b.dataset.v;
+    if (a === "cd") U.chords[+b.dataset.k].d = v; else U.chords.forEach(c => { c.d = v; });
+    relayout(); chordsBox(a === "cd" ? +b.dataset.k : null); el("stBoxIn").scrollTop = sc; }
   else if (a === "itg") { imp[b.dataset.k] = !imp[b.dataset.k]; suiteBox(); }
   else if (a === "isu") { imp.si = +b.dataset.v; suiteBox(); }
   else if (a === "iper") { imp.per = +b.dataset.v; suiteBox(); }
@@ -3599,6 +3670,8 @@ root.addEventListener("click", e => {
     case "stop": stopPlay(); renderTop(); draw(); break;
     case "loop": P.loop.on = !P.loop.on; if (P.loop.on && !(P.loop.b > P.loop.a)) { P.loop.a = 0; P.loop.b = songEnd(); } storeSoon(); renderTop(); draw(); break;
     case "metro": st.metro = !st.metro; renderTop(); break;
+    case "mix": st.mix = !st.mix; if (st.mix) st.step = false; render(); break;
+    case "durs": chordsBox(); break;
     case "bpm-": setBpm(P.bpm - 1); break; case "bpm+": setBpm(P.bpm + 1); break; case "bpm": bpmBox(); break;
     case "undo": undo(); render(); break; case "redo": redo(); render(); break;
     case "export": exportMidi(); break;
@@ -3619,12 +3692,12 @@ root.addEventListener("click", e => {
     case "trkMenu": trackMenu(ti); break;
     case "sndT": st.trk = ti; if (P.tracks[ti].kind === "drum") kitBox(ti); else { soundFor = "trk"; openSounds("trk"); } renderHeads(); break;
     case "snd": if (trk().kind === "drum") kitBox(st.trk); else { soundFor = "trk"; openSounds("trk"); } break;
-    case "mute": P.tracks[ti].mute = !P.tracks[ti].mute; mixAll(); storeSoon(); renderHeads(); draw(); break;
-    case "solo": P.tracks[ti].solo = !P.tracks[ti].solo; mixAll(); storeSoon(); renderHeads(); draw(); break;
+    case "mute": P.tracks[ti].mute = !P.tracks[ti].mute; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
+    case "solo": P.tracks[ti].solo = !P.tracks[ti].solo; mixAll(); storeSoon(); renderHeads(); renderMixer(); draw(); break;
     case "vol-": case "vol+": { const t = P.tracks[ti]; t.vol = Math.max(0, Math.min(127, t.vol + (a === "vol+" ? 8 : -8))); mixAll(); storeSoon(); renderHeads(); break; }
     case "volv": volBox(ti); break;
     case "pickTrk": trkPickBox(); break;
-    case "step": st.step = !st.step; grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
+    case "step": st.step = !st.step; if (st.step) st.mix = false; grp = null; renderBar(); render(); if (st.step) toast("Pas à pas : chaque touche pose une note au curseur bleu, qui avance."); break;
     case "pencil": st.pencil = !st.pencil; renderBar(); toast(st.pencil ? "Crayon : un toucher dans la grille pose une note." : "Crayon retiré : un toucher dans la grille ne pose rien."); break;
     case "grid": gridBox(); break;
     case "quant": doQuant(); break;
@@ -3662,7 +3735,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ },
 };
 return api;
 })();
