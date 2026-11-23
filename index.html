@@ -3311,6 +3311,7 @@ document.body.insertAdjacentHTML("beforeend", `
   </div>
 </div>
 <div id="stBox"><div class="box" id="stBoxIn"></div></div>
+<input type="file" id="stMidIn" accept=".mid,.midi,.kar,audio/midi,audio/x-midi" style="display:none">
 <div id="stToast"></div>`);
 const el = id => document.getElementById(id);
 const root = el("studio"), cv = el("stCv"), acv = el("stArrCv");
@@ -3345,6 +3346,7 @@ function renderTop() {
     <button class="pill" data-a="bpm-">−</button><button class="pill" data-a="bpm">♩ ${P.bpm}</button><button class="pill" data-a="bpm+">+</button>
     <button class="pill" data-a="undo" ${undoS.length ? "" : 'style="opacity:.4"'}>↶</button>
     <button class="pill" data-a="redo" ${redoS.length ? "" : 'style="opacity:.4"'}>↷</button>
+    <button class="pill" data-a="impMid">⤒ MIDI</button>
     <button class="pill" data-a="export">⤓ MIDI</button>`;
   posLbl(tp.on ? tickAt(ac.currentTime) : st.cur);
 }
@@ -3354,6 +3356,7 @@ function renderBar() {
   if (st.view === "arr") {
     el("stBar").innerHTML = `
       <button class="pill gold" data-a="suite">⇩ Suite…</button>
+      <button class="pill ${(P.chords || []).length ? "on" : ""}" data-a="chTrack">🎼 Accords${(P.chords || []).length ? " (" + P.chords.length + ")" : ""}</button>
       <button class="pill ${mc ? "on" : ""}" data-a="sections">🏷 Sections${mc ? " (" + mc + ")" : ""}</button>
       <button class="pill ${st.auto ? "gold" : ""}" data-a="autoToggle">📈 Auto</button>
       ${st.auto ? Object.entries(AUTO_META).map(([k, m]) => `<button class="pill ${st.auto === k ? "on" : ""}" data-a="autoK" data-v="${k}" style="border-bottom:2px solid ${m.col}">${m.n}</button>`).join("") +
@@ -3488,12 +3491,14 @@ function drawRoll(pos) {
   const g = cv.getContext("2d"), W = cv.width / dpr, H = cv.height / dpr, t = trk(), R = activeReg(t), rh = rowH(), top = rollTop(), gh = gridH(), drumT = t.kind === "drum";
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = "#0d1420"; g.fillRect(0, 0, W, H);
   const sc = scalePcs();
-  // Rangées
+  const curCh = chordAtTick(st.cur), curChPcs = curCh ? chordPcsOf(curCh) : null;
+  // Rangées (gamme en bleu subtil ; notes de l'accord actif de la Piste d'accords teintées or)
   g.save(); g.beginPath(); g.rect(KW, top, W - KW, gh); g.clip();
   const r0 = Math.floor(st.y0 / rh), r1 = Math.min(rollRows() - 1, Math.ceil((st.y0 + gh) / rh));
   for (let r = r0; r <= r1; r++) {
     const p = pOfRow(r), y = top + r * rh - st.y0;
-    g.fillStyle = drumT ? (r % 2 ? "#121b2a" : "#16202f") : BLACK.includes(p % 12) ? "#0f1724" : sc.has(p % 12) ? "#1a2638" : "#152030";
+    const isChTone = !drumT && curChPcs && curChPcs.has(p % 12);
+    g.fillStyle = drumT ? (r % 2 ? "#121b2a" : "#16202f") : isChTone ? "#26231c" : BLACK.includes(p % 12) ? "#0f1724" : sc.has(p % 12) ? "#1a2638" : "#152030";
     g.fillRect(KW, y, W - KW, rh);
     g.fillStyle = !drumT && p % 12 === 0 ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.04)"; g.fillRect(KW, y + rh - 1, W - KW, 1);
   }
@@ -4397,6 +4402,20 @@ function midiInvert() {
   ns.forEach(n => { n.p = Math.max(21, Math.min(108, 2 * mid - n.p)); });
   changed(); toast("Hauteurs inversées (miroir).");
 }
+function midiFollowChords() {
+  const { R, ns } = targetNotes(); if (!R || !ns.length || trk().kind === "drum") return;
+  if (!P.chords || !P.chords.length) { toast("Pose d'abord des accords sur la Piste d'accords (🎼 Accords)."); return; }
+  mark(); let ch = 0;
+  ns.forEach(n => {
+    const c = chordAtTick(R.s + n.s); if (!c) return;
+    const pcs = chordPcsOf(c); if (!pcs || !pcs.size || pcs.has(n.p % 12)) return;
+    for (let d = 1; d <= 6; d++) {
+      if (n.p + d <= 108 && pcs.has((n.p + d) % 12)) { n.p += d; ch++; break; }
+      if (n.p - d >= 21 && pcs.has((n.p - d) % 12)) { n.p -= d; ch++; break; }
+    }
+  });
+  changed(); toast(ch ? `${ch} note(s) alignée(s) sur la Piste d'accords.` : "Toutes les notes appartiennent déjà aux accords.");
+}
 function midiToolsBox() {
   const t = trk(), { ns } = targetNotes(), scope = st.sel.size ? `${ns.length} notes sélectionnées` : `tout le clip (${ns.length} notes)`;
   const g = (GRIDS.find(x => x[1] === st.grid) || GRIDS[4])[0];
@@ -4419,8 +4438,9 @@ function midiToolsBox() {
       <button class="pill" data-b="mVel" data-v="decresc">📉 Decrescendo</button>
       <button class="pill" data-b="mVel" data-v="comp">Compresser écarts</button>
       <button class="pill" data-b="mVel" data-v="eq">Égaliser (${st.vel})</button></div>
-    ${t.kind === "drum" ? "" : `<div class="chips"><span class="lbl2">Hauteur & Gamme (${esc(keyName())})</span>
+    ${t.kind === "drum" ? "" : `<div class="chips"><span class="lbl2">Hauteur & Harmonie (${esc(keyName())})</span>
       <button class="pill on" data-b="mScale">🎼 Plier à la gamme</button>
+      ${(P.chords || []).length ? `<button class="pill gold" data-b="mChords">⚡ Plier aux accords</button>` : ""}
       <button class="pill" data-b="mInv">⇅ Miroir</button>
       <button class="pill" data-b="mRet">⇄ Rétrograde</button></div>`}
     <div class="lbl2" style="white-space:normal">Astuce : tu peux aussi glisser le doigt dans la piste Vélocité en bas du Piano roll pour dessiner une courbe continue.</div>
@@ -4709,7 +4729,7 @@ function importSuite(o) {
   if (o.melo) { const tm = find("Mélodie", "inst", S.tSolo || "hq:flute");
     putReg(tm, "Mélodie", genMelody(spans, s0, end, scalePcs(), seed).map(n => ({ ...n, i: nid++ }))); }
   P.chords = (P.chords || []).filter(c => c.s < c0 || c.s >= cEnd);
-  spans.forEach(x => P.chords.push({ s: x.s, d: x.e - x.s, n: cName(x.c) })); P.chords.sort((a, b) => a.s - b.s);
+  spans.forEach(x => P.chords.push({ s: x.s, d: x.e - x.s, n: cName(x.c), pc: x.c.pc, l: x.c.l, t: x.c.t, b: x.c.b || 0, v: x.c.v || null })); P.chords.sort((a, b) => a.s - b.s);
   if (P.bars * barT() < end) P.bars = Math.ceil(end / barT());
   P.loop = { on: true, a: s0, b: end };
   st.trk = P.tracks.indexOf(tc); st.regId = rC.id;
@@ -4740,6 +4760,7 @@ function projectsBox() {
   store();
   box(`<h3>📁 Projets</h3>
     <div class="it"><input type="text" id="stNewName" placeholder="Nom du nouveau projet"><button class="pill on" data-b="new">＋ Nouveau</button></div>
+    <div class="chips"><button class="pill gold" data-b="impMidBox">⤒ Importer un fichier MIDI (.mid)</button></div>
     ${DB.list.slice().sort((a, b) => (b.d || 0) - (a.d || 0)).map(p => `<div class="it"><span class="g">${p.id === P.id ? "▶ " : ""}${esc(p.name)} <span class="lbl2">· ${p.tracks.length} pistes · ${p.bars} mes. · ${new Date(p.d || 0).toLocaleDateString("fr-FR")}</span></span>
       ${p.id === P.id ? "" : `<button class="pill on" data-b="open" data-id="${p.id}">Ouvrir</button>`}
       <button class="pill" data-b="ren" data-id="${p.id}">✎</button><button class="pill" data-b="copyP" data-id="${p.id}">⧉</button><button class="pill" data-b="delP" data-id="${p.id}">✕</button></div>`).join("")}
@@ -5037,12 +5058,230 @@ function chordsBox(focus) {
     <button class="pill" data-b="close">Fermer</button>`);
   if (focus != null) { const r = el("stCh" + focus); if (r) el("stBoxIn").scrollTop = r.offsetTop - 120; }
 }
-// Toucher le nom d'un accord sur la règle : sa durée.
+// ------------------------------------------------------------------ Piste d'accords éditable (Chord Track façon Cubase)
+const CH_TYPES = ["maj", "m", "7", "maj7", "m7", "m7b5", "dim7", "6", "m6", "add9", "9", "maj9", "m9", "11", "m11", "13", "sus4", "7sus4", "7b9", "7s9", "aug"].filter(k => D.types[k]);
+function chordAtTick(tick) { return (P && P.chords || []).find(c => tick >= c.s && tick < c.s + c.d) || null; }
+function chordResolve(c) {
+  if (!c) return null;
+  if (c.pc != null && c.t && D.types[c.t]) return { pc: c.pc, l: c.l ?? keyL[c.pc], t: c.t, b: c.b || 0, v: c.v || null };
+  // Résolution rapide depuis le nom texte (anciens projets avant Lot 5).
+  const nm = String(c.n || "").trim();
+  const baseMap = [["Do♯", 1, 0], ["Ré♭", 1, 1], ["Ré♯", 3, 1], ["Mi♭", 3, 2], ["Fa♯", 6, 3], ["Sol♭", 6, 4], ["Sol♯", 8, 4], ["La♭", 8, 5], ["La♯", 10, 5], ["Si♭", 10, 6],
+    ["Do", 0, 0], ["Ré", 2, 1], ["Mi", 4, 2], ["Fa", 5, 3], ["Sol", 7, 4], ["La", 9, 5], ["Si", 11, 6]];
+  const main = nm.split("/")[0];
+  const hit = baseMap.find(([p]) => main.startsWith(p));
+  if (!hit) return { pc: P.key.root, l: P.key.rootL, t: "maj", b: 0 };
+  const sym = main.slice(hit[0].length);
+  const tid = Object.keys(D.types).find(k => D.types[k].sym === sym) || (sym.startsWith("m") ? "m7" : "maj7");
+  return { pc: hit[1], l: hit[2], t: tid, b: 0 };
+}
+function chordPcsOf(c) {
+  const r = chordResolve(c); if (!r || !D.types[r.t]) return null;
+  return new Set(D.types[r.t].tones.map(x => (r.pc + x[0]) % 12));
+}
+function auditionChordObj(c) {
+  const r = chordResolve(c); if (!r) return;
+  audio(); ac.resume();
+  const ns = chordNotes(r), now = ac.currentTime;
+  const tc = P.tracks.find(x => x.name === "Accords" && x.kind === "inst") || P.tracks.find(x => x.kind === "inst");
+  ns.forEach(p => tc ? noteOn(tc, p, 86, now, 0.85, Math.sqrt(2.4 / ns.length)) : play(p, 0.75, S.tPad || "hq:grand", busPad, false, now));
+}
+const ctOpt = { bass: true, drums: false, rhy: true, melo: false };
+function applyChordTrack() {
+  const cs = (P.chords || []).slice().sort((a, b) => a.s - b.s);
+  if (!cs.length) { toast("Ajoute d'abord au moins un accord."); return; }
+  const chords = cs.map(c => ({ ...chordResolve(c), d: Math.max(0.5, c.d / TPQ) }));
+  importSuite({
+    chords, s0: cs[0].s, clearTo: Math.max(cs[cs.length - 1].s + cs[cs.length - 1].d, P.suite ? P.suite.end : 0),
+    per: 0, bass: ctOpt.bass, drums: ctOpt.drums, rhy: ctOpt.rhy, melo: ctOpt.melo,
+    style: imp.style || S.style || "pop", key: false, keepView: true
+  });
+  toast(`Pistes mises à jour depuis la Piste d'accords (${cs.length} accords).`);
+}
+function chordTrackBox() {
+  const cs = (P.chords || []).sort((a, b) => a.s - b.s), bt = barT();
+  const tg = (k, l) => `<button class="pill ${ctOpt[k] ? "gold" : ""}" data-b="ctTg" data-k="${k}">${ctOpt[k] ? "✓ " : ""}${l}</button>`;
+  box(`<h3>🎼 Piste d'accords (Chord Track · ${cs.length})</h3>
+    <div class="lbl2" style="white-space:normal">Édite chaque accord directement ici (ou en touchant son nom sur la règle), puis clique ⚡ Mettre à jour pour régénérer Accords / Basse !</div>
+    <div class="chips"><span class="lbl2">Ajouter un degré :</span>
+      ${degChords().map((c, k) => `<button class="pill" data-b="ctAddDeg" data-v="${k}"><b style="color:var(--gold)">${c.lab}</b> ${esc(cName(c))}</button>`).join("")}</div>
+    ${cs.length ? `<div style="display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto;touch-action:pan-y">${cs.map((c, i) => {
+      const m = Math.floor(c.s / bt) + 1, bf = Math.round((c.s % bt) / TPQ * 2) / 2, durM = Math.round(c.d / bt * 4) / 4;
+      return `<div class="it"><span class="g"><b>${i + 1}.</b> <b style="color:var(--gold)">${esc(c.n)}</b> <span class="lbl2">m.${m}${bf ? "·" + (bf + 1) : ""} · ${durM} mes.</span></span>
+        <button class="pill" data-b="ctPlay" data-v="${i}">▶</button>
+        <button class="pill on" data-b="ctEd" data-v="${i}">✎</button>
+        <button class="pill" data-b="ctDup" data-v="${i}">⧉</button>
+        <button class="pill red" data-b="ctDel" data-v="${i}">✕</button></div>`;
+    }).join("")}</div>` : `<div class="lbl2">Aucun accord sur la piste. Touche un degré ci-dessus ou utilise ⇩ Suite….</div>`}
+    ${cs.length ? `<div class="chips"><span class="lbl2">Suivre les accords :</span>${tg("rhy", "Accords rythmés")}${tg("bass", "Basse")}${tg("drums", "Batterie")}${tg("melo", "Mélodie")}</div>
+      <div class="chips"><button class="pill gold" data-b="ctApply">⚡ Mettre à jour les pistes</button>
+      ${P.suite ? `<button class="pill" data-b="ctDurs">⏱ Durées rapides</button>` : ""}</div>` : ""}
+    <button class="pill" data-b="close">Fermer</button>`);
+}
+function chordEditBox(ci) {
+  const c = (P.chords || [])[ci]; if (!c) { chordTrackBox(); return; }
+  const r = chordResolve(c), bt = barT(), durM = c.d / bt;
+  const tones = [...new Set(D.types[r.t].tones.map(x => x[0] % 12))];
+  box(`<h3>🎼 Modifier l'accord #${ci + 1} · <span style="color:#fff">${esc(c.n)}</span></h3>
+    <div class="chips"><button class="pill gold" data-b="ctPlay" data-v="${ci}">▶ Écouter</button>
+      <span class="lbl2">Durée (mes.) :</span>${[0.25, 0.5, 0.75, 1, 1.5, 2].map(f => `<button class="pill ${Math.abs(durM - f) < 0.02 ? "on" : ""}" data-b="ceDur" data-v="${ci}" data-d="${f}">${f === 0.25 ? "¼" : f === 0.5 ? "½" : f === 0.75 ? "¾" : f === 1.5 ? "1½" : f}</button>`).join("")}</div>
+    <div class="lbl2">Degrés de ${esc(keyName())}</div>
+    <div class="chips">${degChords().map((dc, k) => `<button class="pill" data-b="ceDeg" data-v="${ci}" data-d="${k}"><b style="color:var(--gold)">${dc.lab}</b> ${esc(cName(dc))}</button>`).join("")}</div>
+    <div class="lbl2">Fondamentale</div>
+    <div class="chips">${Array.from({ length: 12 }, (_, pc) => `<button class="pill ${r.pc === pc ? "on" : ""}" data-b="cePc" data-v="${ci}" data-d="${pc}">${sp[keyL[pc]][pc]}</button>`).join("")}</div>
+    <div class="lbl2">Qualité / Couleur</div>
+    <div class="chips">${CH_TYPES.map(t => `<button class="pill ${r.t === t ? "gold" : ""}" data-b="ceT" data-v="${ci}" data-d="${t}">${D.types[t].sym || "maj"}</button>`).join("")}</div>
+    <div class="lbl2">Basse / Renversement</div>
+    <div class="chips"><button class="pill ${!r.b ? "on" : ""}" data-b="ceB" data-v="${ci}" data-d="0">Fond.</button>
+      ${tones.slice(1, 5).map(semi => `<button class="pill ${r.b === semi ? "on" : ""}" data-b="ceB" data-v="${ci}" data-d="${semi}">/${sp[keyL[(r.pc + semi) % 12]][(r.pc + semi) % 12]}</button>`).join("")}</div>
+    <div class="chips"><button class="pill gold" data-b="ctApply">⚡ Mettre à jour les pistes</button>
+      <button class="pill" data-b="chTrackB">← Piste d'accords</button><button class="pill" data-b="close">Fermer</button></div>`);
+}
+// Toucher le nom d'un accord sur la règle : ouvre l'éditeur de cet accord !
 function chordTap(tick) {
-  const U = P.suite; if (!U || tick < U.s0 || tick >= U.end) return false;
-  let T = U.s0; for (let k = 0; k < U.chords.length; k++) { const e = T + Math.round(U.chords[k].d * TPQ); if (tick < e) { chordsBox(k); return true; } T = e; }
+  const cs = P.chords || [];
+  const ci = cs.findIndex(c => tick >= c.s && tick < c.s + c.d);
+  if (ci >= 0) { chordEditBox(ci); return true; }
   return false;
 }
+
+// ------------------------------------------------------------------ Import MIDI multipiste (SMF format 0 & 1 en pur JS)
+function gmProgToSound(prog) {
+  const pick = (...ids) => ids.find(id => id.startsWith("hq:") ? HQ[id.slice(3)] : id.startsWith("sy:") ? SY.get(id.slice(3)) : SOUNDS[id]) || "hq:grand";
+  if (prog <= 3) return pick("hq:p_whiteaem", "hq:grand");
+  if (prog <= 7) return pick("hq:r_dyno", "hq:rhodes", "ep");
+  if (prog <= 15) return pick("hq:vibra", "vibra");
+  if (prog <= 23) return pick("hq:o_hammond", "norgue");
+  if (prog <= 31) return pick("hq:g_nylon", "hq:guitare", "guitare");
+  if (prog <= 39) return pick("hq:b_baixo", "hq:basseelec", "basse");
+  if (prog <= 55) return pick("hq:cordes", "ncordes", "nchaude");
+  if (prog <= 63) return pick("bsection", "bfeutre");
+  if (prog <= 71) return pick("bsax", "bfeutre");
+  if (prog <= 79) return pick("hq:flute", "bsouffle");
+  if (prog <= 87) return pick("bprophet", "bfeutre");
+  if (prog <= 95) return pick("hq:nordpad", "nchaude");
+  return pick("hq:grand");
+}
+const GM_DRUM_MAP = { 35: 36, 36: 36, 37: 37, 38: 38, 40: 38, 39: 39, 41: 45, 43: 45, 45: 45, 47: 48, 48: 48, 50: 48,
+  42: 42, 44: 42, 46: 46, 49: 49, 52: 49, 55: 49, 57: 49, 51: 51, 53: 51, 59: 51, 54: 70, 70: 70, 56: 56 };
+function parseMidi(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let p = 0;
+  const str = n => { let s = ""; for (let i = 0; i < n && p + i < bytes.length; i++) s += String.fromCharCode(bytes[p + i]); p += n; return s; };
+  const u16 = () => { const v = dv.getUint16(p); p += 2; return v; };
+  const u32 = () => { const v = dv.getUint32(p); p += 4; return v; };
+  const vlq = () => { let v = 0, b = 0; do { b = bytes[p++]; v = (v << 7) | (b & 127); } while ((b & 128) && p < bytes.length); return v; };
+  if (str(4) !== "MThd") throw new Error("Fichier MIDI invalide (en-tête MThd absent).");
+  const hLen = u32(), fmt = u16(), nTrk = u16(), div = u16();
+  p = 8 + hLen;
+  const fTpq = div & 0x7fff || 480;
+  const scaleT = t => Math.round(t * TPQ / fTpq);
+  let bpm = 120, num = 4;
+  const markers = [], rawTracks = [];
+  for (let ti = 0; ti < nTrk && p + 8 <= bytes.length; ti++) {
+    const id = str(4), len = u32(), end = Math.min(bytes.length, p + len);
+    if (id !== "MTrk") { p = end; continue; }
+    let tick = 0, run = 0, name = "";
+    const chMap = new Map();
+    const getCh = ch => { if (!chMap.has(ch)) chMap.set(ch, { ch, name: "", prog: 0, vol: 85, pan: 0, open: new Map(), notes: [] }); return chMap.get(ch); };
+    while (p < end) {
+      tick += vlq(); if (p >= end) break;
+      let stB = bytes[p];
+      if (stB >= 0x80) { p++; if (stB < 0xf0) run = stB; } else stB = run;
+      if (stB === 0xff) {
+        const mt = bytes[p++], ml = vlq(), mEnd = Math.min(end, p + ml);
+        if (mt === 0x51 && ml === 3) { const us = (bytes[p] << 16) | (bytes[p + 1] << 8) | bytes[p + 2]; if (us > 0) bpm = Math.max(30, Math.min(260, Math.round(60000000 / us))); }
+        else if (mt === 0x58 && ml >= 2) { num = Math.max(2, Math.min(7, bytes[p])); }
+        else if (mt === 0x03) { try { name = new TextDecoder("utf-8").decode(bytes.subarray(p, mEnd)).trim(); } catch (e) {} }
+        else if (mt === 0x06) { try { const lb = new TextDecoder("utf-8").decode(bytes.subarray(p, mEnd)).trim(); if (lb) markers.push({ s: scaleT(tick), name: lb }); } catch (e) {} }
+        p = mEnd;
+      } else if (stB === 0xf0 || stB === 0xf7) { p += vlq(); }
+      else {
+        const cmd = stB & 0xf0, ch = stB & 0x0f;
+        const d1 = bytes[p++], d2 = (cmd === 0xc0 || cmd === 0xd0) ? 0 : bytes[p++];
+        const C = getCh(ch);
+        if (cmd === 0xc0) C.prog = d1;
+        else if (cmd === 0xb0 && d1 === 7) C.vol = Math.max(10, Math.min(127, d2));
+        else if (cmd === 0xb0 && d1 === 10) C.pan = Math.round(((d2 - 64) / 64) * 100) / 100;
+        else if (cmd === 0x90 && d2 > 0) {
+          const prev = C.open.get(d1);
+          if (prev) C.notes.push({ p: prev.p, s: prev.s, d: Math.max(6, scaleT(tick) - prev.s), v: prev.v });
+          C.open.set(d1, { p: d1, s: scaleT(tick), v: d2 });
+        } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+          const prev = C.open.get(d1);
+          if (prev) { C.open.delete(d1); C.notes.push({ p: prev.p, s: prev.s, d: Math.max(6, scaleT(tick) - prev.s), v: prev.v }); }
+        }
+      }
+    }
+    chMap.forEach(C => {
+      C.open.forEach(prev => C.notes.push({ p: prev.p, s: prev.s, d: TPQ, v: prev.v }));
+      if (C.notes.length) rawTracks.push({ ...C, name: name || (C.ch === 9 ? "Batterie" : `Piste ${rawTracks.length + 1}`) });
+    });
+    p = end;
+  }
+  return { fmt, bpm, num, markers, tracks: rawTracks };
+}
+let midImpMode = "new";
+function importMidiBytes(bytes, fname, mode = "new") {
+  const M = parseMidi(bytes);
+  if (!M.tracks.length) { toast("Aucune note trouvée dans ce fichier MIDI."); return null; }
+  const bt = (M.num || 4) * TPQ;
+  const maxEnd = Math.max(bt, ...M.tracks.flatMap(mt => mt.notes.map(n => n.s + n.d)));
+  const bars = Math.max(4, Math.ceil(maxEnd / bt));
+  const cleanName = String(fname || "Import MIDI").replace(/\.(midi?|kar)$/i, "").slice(0, 32) || "Import MIDI";
+  if (mode === "new") {
+    store();
+    const np = newProject(cleanName);
+    np.bpm = M.bpm; np.num = M.num; np.bars = bars; np.tracks = []; np.markers = [];
+    DB.list.push(pack(np)); openProject(np.id);
+  } else {
+    mark();
+    if (bars > P.bars) P.bars = bars;
+  }
+  M.tracks.forEach((rt, idx) => {
+    const isDrum = rt.ch === 9;
+    const t = mkTrack(rt.name, isDrum ? "drum" : "inst", isDrum ? null : gmProgToSound(rt.prog), P.tracks.length + idx);
+    t.vol = Math.min(127, Math.max(20, rt.vol || 80));
+    t.pan = Math.max(-1, Math.min(1, rt.pan || 0));
+    const ns = rt.notes.map(n => ({
+      p: isDrum ? (GM_DRUM_MAP[n.p] || 36) : Math.max(21, Math.min(108, n.p)),
+      s: Math.max(0, n.s), d: isDrum ? Math.min(24, n.d) : Math.max(6, n.d), v: Math.max(1, Math.min(127, n.v)), i: nid++
+    })).sort((a, b) => a.s - b.s);
+    const tEnd = Math.max(bt, Math.ceil(Math.max(...ns.map(n => n.s + n.d)) / bt) * bt);
+    t.regions = [mkReg(rt.name, 0, tEnd, ns)];
+    P.tracks.push(t);
+  });
+  if (M.markers.length) {
+    M.markers.sort((a, b) => a.s - b.s);
+    M.markers.forEach((mk, i) => {
+      const nextS = i + 1 < M.markers.length ? M.markers[i + 1].s : bars * bt;
+      P.markers.push({ id: uid("m"), name: mk.name, s: mk.s, d: Math.max(bt, nextS - mk.s), color: COLORS[i % COLORS.length] });
+    });
+  }
+  P.loop = { on: true, a: 0, b: Math.min(bars * bt, 8 * bt) };
+  st.trk = 0; st.regId = P.tracks[0]?.regions[0]?.id || null;
+  st.ax0 = 0; st.appt = Math.max(0.01, Math.min(0.25, (acv.width / dpr - HW - 10) / Math.max(bt, bars * bt)));
+  preloadAll(); changed(); render();
+  toast(`✓ ${M.tracks.length} pistes importées · ${P.bpm} BPM · ${P.bars} mes.`);
+  return M;
+}
+function impMidBox() {
+  box(`<h3>⤒ Importer un fichier MIDI (.mid)</h3>
+    <div class="lbl2" style="white-space:normal">Importe un fichier MIDI multipiste (format 0 ou 1) directement dans le Studio : pistes séparées, batterie canal 10, tempo, marqueurs de sections et sons attribués automatiquement.</div>
+    <div class="chips"><button class="pill gold" data-b="midPick" data-v="new">📂 Nouveau projet depuis .mid</button>
+      <button class="pill on" data-b="midPick" data-v="add">＋ Ajouter pistes au projet actuel</button></div>
+    <button class="pill" data-b="close">Annuler</button>`);
+}
+el("stMidIn").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try { importMidiBytes(new Uint8Array(rd.result), f.name, midImpMode); }
+    catch (err) { toast("Erreur import MIDI : " + err.message); }
+  };
+  rd.readAsArrayBuffer(f);
+});
 function volBox(i) {
   const t = P.tracks[i];
   box(`<h3 style="color:${t.color}">Volume de « ${esc(t.name)} »</h3>
@@ -5162,8 +5401,52 @@ el("stBox").addEventListener("click", e => {
   else if (a === "mDur") { closeBox(); midiDurOp(b.dataset.v); }
   else if (a === "mVel") { closeBox(); midiVelOp(b.dataset.v); }
   else if (a === "mScale") { closeBox(); midiScaleQuant(); }
+  else if (a === "mChords") { closeBox(); midiFollowChords(); }
   else if (a === "mInv") { closeBox(); midiInvert(); }
   else if (a === "mRet") { closeBox(); midiRetro(); }
+  else if (a === "chTrackB") chordTrackBox();
+  else if (a === "ctDurs") chordsBox();
+  else if (a === "ctTg") { ctOpt[b.dataset.k] = !ctOpt[b.dataset.k]; chordTrackBox(); }
+  else if (a === "ctPlay") { const c = (P.chords || [])[+b.dataset.v]; if (c) auditionChordObj(c); }
+  else if (a === "ctEd") chordEditBox(+b.dataset.v);
+  else if (a === "ctAddDeg") {
+    const dc = degChords()[+b.dataset.v], bt = barT(); if (!dc) return;
+    mark(); P.chords = P.chords || [];
+    const s = P.chords.length ? P.chords[P.chords.length - 1].s + P.chords[P.chords.length - 1].d : Math.floor(st.cur / bt) * bt;
+    const item = { s, d: bt, n: cName(dc), pc: dc.pc, l: dc.l, t: dc.t, b: 0 };
+    P.chords.push(item); P.chords.sort((x, y) => x.s - y.s);
+    auditionChordObj(item); changed(); chordTrackBox(); render(); }
+  else if (a === "ctDup") {
+    const cs = P.chords || [], i = +b.dataset.v, c = cs[i]; if (!c) return;
+    mark();
+    const copy = { ...c, s: c.s + c.d };
+    cs.forEach(x => { if (x.s >= copy.s) x.s += c.d; });
+    cs.push(copy); cs.sort((x, y) => x.s - y.s);
+    changed(); chordTrackBox(); render(); }
+  else if (a === "ctDel") {
+    const cs = P.chords || [], i = +b.dataset.v; if (!cs[i]) return;
+    mark(); cs.splice(i, 1); changed(); chordTrackBox(); render(); }
+  else if (a === "ceDur") {
+    const ci = +b.dataset.v, c = (P.chords || [])[ci]; if (!c) return;
+    const nd = Math.round(+b.dataset.d * barT()), diff = nd - c.d;
+    mark(); c.d = nd;
+    P.chords.forEach((x, k) => { if (k > ci) x.s = Math.max(0, x.s + diff); });
+    changed(); chordEditBox(ci); render(); }
+  else if (a === "ceDeg") {
+    const ci = +b.dataset.v, c = (P.chords || [])[ci], dc = degChords()[+b.dataset.d]; if (!c || !dc) return;
+    mark(); Object.assign(c, { pc: dc.pc, l: dc.l, t: dc.t, b: 0, v: null, n: cName(dc) });
+    auditionChordObj(c); changed(); chordEditBox(ci); render(); }
+  else if (a === "cePc" || a === "ceT" || a === "ceB") {
+    const ci = +b.dataset.v, c = (P.chords || [])[ci]; if (!c) return;
+    const r = chordResolve(c);
+    if (a === "cePc") { r.pc = +b.dataset.d; r.l = keyL[r.pc]; r.v = null; }
+    else if (a === "ceT") { r.t = b.dataset.d; r.b = 0; r.v = null; }
+    else if (a === "ceB") { r.b = +b.dataset.d; r.v = null; }
+    mark(); Object.assign(c, { pc: r.pc, l: r.l, t: r.t, b: r.b, v: null, n: cName(r) });
+    auditionChordObj(c); changed(); chordEditBox(ci); render(); }
+  else if (a === "ctApply") { closeBox(); applyChordTrack(); }
+  else if (a === "impMidBox") impMidBox();
+  else if (a === "midPick") { midImpMode = b.dataset.v || "new"; closeBox(); el("stMidIn").click(); }
   else if (a === "pickT") { st.trk = ti; st.regId = P.tracks[ti]?.regions[0]?.id || null; st.sel.clear(); st.y0 = null; closeBox(); render(); centerRoll(); draw(); }
 });
 
@@ -5201,7 +5484,9 @@ root.addEventListener("click", e => {
     case "durs": chordsBox(); break;
     case "bpm-": setBpm(P.bpm - 1); break; case "bpm+": setBpm(P.bpm + 1); break; case "bpm": bpmBox(); break;
     case "undo": undo(); render(); break; case "redo": redo(); render(); break;
+    case "impMid": impMidBox(); break;
     case "export": exportMidi(); break;
+    case "chTrack": chordTrackBox(); break;
     case "roll": openRoll(true); break;
     case "arr": st.view = "arr"; render(); break;
     case "addInst": { mark(); const t = mkTrack("Piste " + (P.tracks.length + 1), "inst", S.tSolo || "hq:grand", P.tracks.length); P.tracks.push(t); st.trk = P.tracks.length - 1; st.regId = null; changed(); render(); soundFor = "trk"; openSounds("trk"); break; }
@@ -5264,7 +5549,7 @@ const api = {
   setSnd(id) { const t = trk(); if (!t || t.kind === "drum") return; t.snd = id; storeSoon(); preloadAll(); renderBar(); renderHeads(); },
   tryIt() { const t = trk(); if (!t) return; audio(); const now = ac.currentTime; [0, 4, 7].forEach((d, k) => noteOn(t, 60 + (P.key.root || 0) + d, 90, now + 0.05 + k * 0.18, 0.5)); },
   sounds: () => (P ? P.tracks.map(t => t.snd).filter(Boolean) : []),
-  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll, doQuant, midiHumanize, midiLegato, midiDurOp, midiVelOp, midiScaleQuant, midiRetro, midiInvert, midiToolsBox, seqApplyPreset, seqVariation, seqSetCell, renderSeq, autoVal, applyAuto, addAutoFade, clrAuto, rec, recStart, recStop, recLiveNoteOn, recLiveNoteOff, renderRec },
+  test: { SUITES, imp, newMelody, chordsBox, relayout, get P() { return P; }, st, tp, midiBytes, importSuite, stepNote, stepChord, stepRest, stepBack, startPlay, stopPlay, tickAt, draw, render, openRoll, outQ, flatNotes, splitAtCur, dupReg, mergeReg, delReg, addEmptyReg, sliceAtMarkers, dupSection, moveSection, delSection, pack, unpack, undo, redo, flattenReg, fxBox, dlyBox, fxOf, dlyCfg, busOf, tBus, mixAll, doQuant, midiHumanize, midiLegato, midiDurOp, midiVelOp, midiScaleQuant, midiFollowChords, midiRetro, midiInvert, midiToolsBox, seqApplyPreset, seqVariation, seqSetCell, renderSeq, autoVal, applyAuto, addAutoFade, clrAuto, rec, recStart, recStop, recLiveNoteOn, recLiveNoteOff, renderRec, chordTrackBox, chordEditBox, applyChordTrack, chordResolve, parseMidi, importMidiBytes },
 };
 return api;
 })();
