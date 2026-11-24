@@ -295,7 +295,10 @@ if (S.bassOn == null) S.bassOn = true;
 if (S.drums == null) S.drums = true;
 if (S.transp == null) S.transp = 0;
 if (S.fills == null) S.fills = true;
-if (S.cSync == null) S.cSync = true;
+// Par défaut, les accords restent strictement calés sur la mesure (même horloge que basse/batterie).
+// Migration v2 : l'ancien mode « départ au toucher » (horloge libre hors mesure) était activé par défaut.
+if (S.cSyncV !== 2) { S.cSyncV = 2; S.cSync = false; }
+if (S.cSync == null) S.cSync = false;
 if (S.bassUp == null) S.bassUp = true;
 if (!S.kit || (S.kit !== "synth" && !KITS_IDS.includes(S.kit))) S.kit = "synth";
 if (S.vBass == null) S.vBass = 70;
@@ -970,12 +973,12 @@ function voice(n, vel, id, bus) {
   out.gain.linearRampToValueAtTime(peak, t0 + a);
   out.gain.setTargetAtTime(Math.max(peak * sus, 0.0001), t0 + a, d / 3);
   nodes.forEach(o => o.start(t0));
-  return { stop() {
-    const t = ac.currentTime;
+  return { stop(r) {
+    const t = ac.currentTime, rr = r != null ? r : rel;
     out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
-    out.gain.setTargetAtTime(0, t, rel / 4);
-    nodes.forEach(o => o.stop(t + rel * 1.6 + 0.05));
-    setTimeout(() => out.disconnect(), (rel * 1.6 + 0.2) * 1000);
+    out.gain.setTargetAtTime(0, t, rr / 4);
+    nodes.forEach(o => { try { o.stop(t + rr * 1.6 + 0.05); } catch (e) {} });
+    setTimeout(() => out.disconnect(), (rr * 1.6 + 0.2) * 1000);
   } };
 }
 
@@ -1279,6 +1282,7 @@ function hqVoice(n, vel, id, bus) {
     stop(r) {
       stopped = true;
       const t = ac.currentTime, rel = r || I.r;
+      if (t < t0) { out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(0, t); try { cur.s.stop(t0); } catch (e) {} setTimeout(() => { out.disconnect(); pan && pan.disconnect(); }, 50); return; }
       out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(1, t); out.gain.setTargetAtTime(0, t, rel / 4);
       try { cur.s.stop(t + rel * 1.8 + 0.05); } catch (e) {}
       setTimeout(() => { out.disconnect(); pan && pan.disconnect(); }, (rel * 1.8 + 0.3) * 1000);
@@ -1931,7 +1935,7 @@ const STYLES = {
     k: [[0, 1], [7, .6], [10, .8]], s: [[4, .75], [12, .75]], r: [[14, .3]], h: H16(.22, .1), z: at([1, 3, 5, 7, 9, 11, 13, 15], .08), nofill: true },
 };
 const DRUMS = ["k", "s", "c", "h", "o", "y", "z", "r", "b", "w", "t", "u", "x"];
-const acc = { drq: [], run: false, step: 0, nextT: 0, timer: null, recs: [], arpI: 0, bar: 0, vel: 0.8, lastC: { T: -9, k: 0 } };
+const acc = { drq: [], run: false, step: 0, nextT: 0, timer: null, recs: [], arpI: 0, bar: 0, vel: 0.8, lastC: { T: -9, sT: -9, k: -1 }, cOff: 0, cHist: [] };
 // ---- Rythmes « arrangeur » tirés de la banque Titan (Yamaha Montage) : chaque style a ses variations (A–E, de 4 à
 // 16 mesures), ses breaks d'une mesure (FA–FD), parfois une intro (IA, IB) et une fin (END). Batterie à 24 pas par temps ;
 // accords et basse : ceux d'un rythme de la page (cb), répétés à chaque mesure. Tapé pendant le jeu, A–D lance aussitôt
@@ -1944,7 +1948,7 @@ for (const [key, M] of Object.entries(MSTY)) {
   for (const [id, sec] of Object.entries(M.sec)) {
     const n = Math.ceil(sec.steps / bs), evs = [];
     for (const [k, kind, v] of sec.ev) (evs[k] = evs[k] || []).push([kind, v]);
-    secs[id] = { f: M.f, n: M.n, div: 24, steps: sec.steps, nofill: true, evs, hold: base.hold, up: base.up, wide: base.wide,
+    secs[id] = { f: M.f, n: M.n, div: 24, steps: sec.steps, barSteps: bs, nofill: true, evs, hold: base.hold, up: base.up, wide: base.wide,
       ord: base.ord, sec: id,
       C: rep(base.C, n, ([k, gl, a, o], off) => [off + k * f, gl * f, a, o]),
       A: rep(base.A, n, ([k, gl, a], off) => [off + k * f, gl * f, a]),
@@ -1953,6 +1957,7 @@ for (const [key, M] of Object.entries(MSTY)) {
   STYLES[key] = Object.assign({}, secs.A, { m: M, secs, n: M.n, f: M.f });
 }
 const style = () => { const s = STYLES[S.style] || STYLES.pop; return s.m ? s.secs[acc.sec] || s.secs.A : s; };
+const barStepsOf = st => st.barSteps || st.steps;
 const stepDur = () => 60 / S.bpm / (style().div || 4);
 const mainsOf = M => ["A", "B", "C", "D", "E"].filter(x => M.sec[x]);
 // Le break pour aller vers la variation x : le sien (FA pour A…), sinon le plus proche.
@@ -2046,11 +2051,11 @@ function bassNote0(c, deg) {
 }
 // Les accords et arpèges du rythme : le timbre suit la force de ton toucher (enregistrement clair du piano, jamais le plus
 // sourd), les accents du rythme ne changent que le volume. La basse et le reste gardent la force telle quelle.
-function accNote(n, vel, id, bus, T, gate, part, k) {
+function accNote(n, vel, id, bus, T, gate, part, k, sT) {
   let pv = vel, gain;
   if (part === "C" || part === "A") { pv = PADV; gain = padGain(vel); }
   const v = play(n, pv, id, bus, false, T, gain);
-  const r = { v, part, T, k, end: T + gate };
+  const r = { v, part, T, sT: sT != null ? sT : T, k, end: T + gate };
   acc.recs.push(r);
   r.to = setTimeout(() => { v.stop(); acc.recs = acc.recs.filter(x => x !== r); }, Math.max(0, (T + gate - ac.currentTime) * 1000));
 }
@@ -2061,9 +2066,17 @@ function accNote(n, vel, id, bus, T, gate, part, k) {
 const DPLAY = ["très doux", "doux", "moyen", "fort", "très fort"];
 const dBase = () => 0.35 + 0.85 * S.drumPlay / 100;
 const drumInt = vel => { const t = Math.max(0, Math.min(1, (vel - 0.35) / 0.65)); return Math.min(1.25, dBase() * (0.45 + 0.75 * t)); };
-function schedStep(k, T, noDrums, P = { c: true, b: true }) {
+const hasChordAt = (st, k) => (st.C || []).some(x => x[0] === k) || (st.A || []).some(x => x[0] === k);
+const hasBassAt = (st, k) => (st.B || []).some(x => x[0] === k);
+function pushCHist(T, sT, k) {
+  acc.lastC = { T, sT, k };
+  acc.cHist.push({ T, sT, k });
+  if (acc.cHist.length > 8) acc.cHist.shift();
+}
+function schedStep(k, baseT, noDrums, P = { c: true, b: true }, maxGate = 0, noSwing = false) {
   const st = style(), sd = stepDur(), vel = acc.vel, div = st.div || 4;
-  if (st.sw && k % 2 === 1) T += st.sw * sd;
+  const T = !noSwing && st.sw && k % 2 === 1 ? baseT + st.sw * sd : baseT;
+  const clip = g => maxGate > 0 ? Math.min(g, maxGate) : g;
   if (!noDrums && S.drums && st.evs) {
     for (const [kind, v] of st.evs[k] || []) drum(kind, T, v * drumInt(vel));
   } else if (!noDrums && S.drums) {
@@ -2086,8 +2099,8 @@ function schedStep(k, T, noDrums, P = { c: true, b: true }) {
     // Gratté : les notes partent l'une après l'autre (12 ms), vers l'aigu (s) ou vers le grave (S).
     const strum = opt.includes("s") ? 1 : opt.includes("S") ? -1 : 0;
     const order = strum < 0 ? [...ns].reverse() : ns;
-    order.forEach((n, i) => accNote(n, (n === notes[0] ? 0.8 : 1) * a * vel * per, S.tPad, busPad, T + (strum ? i * 0.012 : 0), gl * sd, "C", k));
-    acc.lastC = { T, k };
+    order.forEach((n, i) => accNote(n, (n === notes[0] ? 0.8 : 1) * a * vel * per, S.tPad, busPad, T + (strum ? i * 0.012 : 0), clip(gl * sd), "C", k, baseT));
+    if (!noSwing) pushCHist(T, baseT, k);
   }
   if (P.c) for (const [ks, gl, a] of st.A || []) if (ks === k) {
     // L'arpège : les notes de l'accord sans la basse (sur deux octaves si wide), en montant puis en redescendant,
@@ -2096,43 +2109,47 @@ function schedStep(k, T, noDrums, P = { c: true, b: true }) {
     if (st.wide) up = [...up, ...up.map(n => n + 12)];
     const seq = st.ord ? st.ord.map(f => up[Math.round(f * (up.length - 1))]) : st.up || up.length <= 2 ? up : [...up, ...up.slice(1, -1).reverse()];
     const idx = st.ord ? st.A.findIndex(x => x[0] === k) : acc.arpI++;
-    accNote(seq[idx % seq.length], a * vel * 0.85, S.tPad, busPad, T, gl * sd, "A", k);
-    if (k === 0) acc.lastC = { T, k };
+    accNote(seq[idx % seq.length], a * vel * 0.85, S.tPad, busPad, T, clip(gl * sd), "A", k, baseT);
+    if (!noSwing) pushCHist(T, baseT, k);
   }
   if (P.b && S.bassOn) for (const [ks, gl, a, deg] of st.B || []) if (ks === k) {
     const d = deg === "a" ? (acc.bar % 2 ? "f" : "r") : deg;
     const bn = bassNote(cur, d), bv = a * (0.55 + 0.45 * vel);
-    accNote(bn, bv, S.tBass, busBass, T, gl * sd * 0.95, "B", k);
+    accNote(bn, bv, S.tBass, busBass, T, clip(gl * sd * 0.95), "B", k, baseT);
     // Basse renforcée : la même note une octave plus haut, discrète, que le haut-parleur du téléphone rend bien.
-    if (S.bassUp) accNote(bn + 12, bv * 0.45, S.tBass, busBass, T, gl * sd * 0.95, "B", k);
+    if (S.bassUp) accNote(bn + 12, bv * 0.45, S.tBass, busBass, T, clip(gl * sd * 0.95), "B", k, baseT);
   }
 }
 function accTick() {
   if (!acc.run) return;
-  const st = style();
-  while (acc.nextT < ac.currentTime + 0.09) {
-    if (acc.step >= st.steps) acc.step = 0;
+  // Si le navigateur a gelé l'onglet un instant, on repart proprement sans empiler des dizaines de pas en retard.
+  if (acc.nextT < ac.currentTime - 0.15) acc.nextT = ac.currentTime + 0.03;
+  // Une seule horloge maître pour batterie, basse ET accords : jamais de décalage ni de dérive hors mesure.
+  while (acc.nextT < ac.currentTime + 0.10) {
+    let cur0 = style();
+    if (acc.step >= cur0.steps) acc.step = 0;
     const M = STYLES[S.style] && STYLES[S.style].m;
     // Fin demandée : au début de la mesure suivante, la fin du style (ou un break), puis l'arrêt.
     if (M && acc.endReq && acc.step % 96 === 0 && acc.sec !== "END") {
-      acc.endReq = false; acc.sec = M.sec.END ? "END" : fillFor(M, "A") || "A"; acc.next = "__stop"; acc.step = 0; renderSec();
+      acc.endReq = false; acc.sec = M.sec.END ? "END" : fillFor(M, "A") || "A"; acc.next = "__stop"; acc.step = 0; acc.cOff = 0; renderSec();
+      cur0 = style();
     }
-    const sd = stepDur(), cur0 = style();
-    schedStep(acc.step, acc.nextT, false, S.cSync ? { c: false, b: true } : undefined);
+    const sd = stepDur();
+    if (S.cSync && acc.cOff) {
+      schedStep(acc.step, acc.nextT, false, { c: false, b: true });
+      const ck = ((acc.step - acc.cOff) % cur0.steps + cur0.steps) % cur0.steps;
+      schedStep(ck, acc.nextT, true, { c: true, b: false });
+    } else {
+      schedStep(acc.step, acc.nextT, false);
+    }
     acc.nextT += sd; acc.step++;
     if (acc.step >= cur0.steps) {
       acc.step = 0; acc.bar++;
       if (M && acc.next) {
         if (acc.next === "__stop") { const T = acc.nextT; drum("k", T, 0.9); drum("x", T, 0.8); acc.next = null; S.msecRun = false; stopAcc(); renderAcc(); return; }
-        acc.sec = acc.next; acc.next = null; renderSec();
+        acc.sec = acc.next; acc.next = null; acc.cOff = 0; renderSec();
       }
     }
-  }
-  // « Départ au toucher » : la partie accords suit son propre compteur, parti du dernier accord touché.
-  if (S.cSync) while (acc.cNext < ac.currentTime + 0.09) {
-    if (acc.cStep >= st.steps) acc.cStep = 0;
-    schedStep(acc.cStep, acc.cNext, true, { c: true, b: false });
-    acc.cNext += stepDur(); acc.cStep = (acc.cStep + 1) % st.steps;
   }
 }
 function startAcc() {
@@ -2141,51 +2158,123 @@ function startAcc() {
   acc.endReq = false; acc.next = null; acc.sec = M ? (M.sec[S.msec] ? S.msec : "A") : null;
   if (M && acc.intro) { const i = ["IA", "IB"].find(x => M.sec[x]); if (i) { acc.next = acc.sec; acc.sec = i; } }
   acc.intro = false;
-  acc.run = true; acc.step = 0; acc.bar = 0; acc.arpI = 0; acc.nextT = ac.currentTime + 0.03; acc.cStep = 0; acc.cNext = acc.nextT;
+  acc.run = true; acc.step = 0; acc.bar = 0; acc.arpI = 0; acc.cOff = 0; acc.cHist = []; acc.lastC = { T: -9, sT: -9, k: -1 };
+  acc.nextT = ac.currentTime + 0.03;
   clearInterval(acc.timer); acc.timer = setInterval(accTick, 20); accTick();
 }
 function stopAcc() {
   acc.run = false; clearInterval(acc.timer); acc.timer = null;
   acc.recs.forEach(r => { clearTimeout(r.to); r.v.stop(0.15); }); acc.recs = [];
+  acc.cHist = []; acc.cOff = 0;
   showBeat(0);
 }
-// Un accord touché pendant l'accompagnement : il remplace le précédent dans le rythme.
+// Prochain événement C/A ou B sur la grille maître (d'abord dans l'avance déjà programmée, sinon à venir depuis acc.step).
+function nextGridHit(st, now, wantChord, cOff = 0) {
+  const sd = stepDur(), n = st.steps;
+  let best = null;
+  for (const r of acc.recs) {
+    const ok = wantChord ? (r.part === "C" || r.part === "A") : r.part === "B";
+    if (ok && r.T > now + 0.003 && r.k >= 0) {
+      if (!best || r.T < best.T) best = { T: r.T, sT: r.sT, k: r.k, inPend: true };
+    }
+  }
+  if (best) return best;
+  const d0 = -Math.ceil(Math.max(0, acc.nextT - now) / sd);
+  for (let d = d0; d < n; d++) {
+    const g = ((acc.step + d) % n + n) % n;
+    const k = wantChord && cOff ? ((g - cOff) % n + n) % n : g;
+    if (wantChord ? hasChordAt(st, k) : hasBassAt(st, k)) {
+      const sT = acc.nextT + d * sd;
+      const T = st.sw && k % 2 === 1 ? sT + st.sw * sd : sT;
+      if (T > now + 0.003) return { T, sT, k, inPend: false };
+    }
+  }
+  return null;
+}
+// Un accord touché pendant l'accompagnement : il reste strictement dans la mesure (même horloge maître que basse/batterie).
 //  - pas encore lancé : le rythme part sur ce toucher (temps 1) ;
-//  - les notes déjà programmées (les 90 ms à venir) sont refaites avec le nouvel accord : touché juste avant le temps, il tombe pile ;
-//  - touché juste après un accord du rythme (moins de 0,16 s) : ce coup est rejoué tout de suite avec le nouvel accord ;
-//  - en ballade / nappe (accord tenu sur la mesure) : le nouvel accord sonne aussitôt, jusqu'au prochain coup.
+//  - touché un peu avant un coup d'accord (≤ 150 ms) : il tombe pile dessus (pas de double frappe, pas de décalage) ;
+//  - touché juste après un coup d'accord (< 160 ms) : rattrapage immédiat, les coups suivants restent pile sur la mesure ;
+//  - en milieu de mesure (ballade, R&B, ou écart > 300 ms avant le prochain coup) : l'accord sonne aussitôt (calé sur la
+//    croche/temps s'il est à ≤ 75 ms) jusqu'au prochain coup de la grille, jamais en décalage sur la mesure suivante.
 function accChord(c, cv) {
   audio(); pedOff();
   acc.vel = Math.max(0.35, Math.min(1, cv || 0.8));
   if (!acc.run) { startAcc(); renderAcc(); return; }
   const now = ac.currentTime, sd = stepDur(), st = style();
   if (S.cSync) { cKeyOn(now); return; }
+  const nxtC = nextGridHit(st, now, true);
+  const nxtB = nextGridHit(st, now, false);
   const pend = acc.recs.filter(r => r.part !== "D" && r.T > now + 0.003);
   const ring = acc.recs.filter(r => r.T <= now + 0.003 && (r.part === "C" || r.part === "B" || r.part === "A"));
-  [...pend, ...ring].forEach(r => { clearTimeout(r.to); r.v.stop(r.T > now ? 0.004 : 0.08); });
+  [...pend, ...ring].forEach(r => { clearTimeout(r.to); r.v.stop(r.T > now + 0.003 ? 0.004 : 0.05); });
   acc.recs = acc.recs.filter(r => !pend.includes(r) && !ring.includes(r));
-  const redo = [...new Map(pend.map(r => [r.T, r.k])).entries()];
-  redo.forEach(([T, k]) => schedStep(k, T, true));
-  if (redo.length) return;
-  if (now - acc.lastC.T < 0.16) { schedStep(acc.lastC.k, now + 0.005, true); return; }
-  if (st.hold) {
-    const toEnd = (st.steps - acc.step) * sd + Math.max(0, acc.nextT - now);
+  // Refaire chaque pas en attente UNE SEULE FOIS avec son instant de grille brut (sT, sans double gratté ni double swing).
+  const redoMap = new Map();
+  for (const r of pend) if (r.k >= 0) redoMap.set(r.sT.toFixed(5) + ":" + r.k, [r.sT, r.k]);
+  const redo = [...redoMap.values()];
+  redo.forEach(([sT, k]) => schedStep(k, sT, true));
+  const redoHasC = redo.some(([, k]) => hasChordAt(st, k));
+  const redoHasB = redo.some(([, k]) => hasBassAt(st, k));
+  // Anticipation : le prochain coup d'accord de la grille arrive tout de suite → il tombera pile sur le temps.
+  if (redoHasC || (nxtC && nxtC.T - now <= Math.min(0.15, Math.max(0.09, sd * 1.5)))) return;
+  // Rattrapage léger : un coup d'accord vient tout juste de passer (< 160 ms) → on le rejoue avec le nouvel accord,
+  // coupé juste avant le prochain coup de la grille pour ne jamais baver ni décaler la suite.
+  const lastC = [...acc.cHist].reverse().find(x => x.T <= now + 0.003);
+  const maxGate = nxtC ? Math.max(0.05, nxtC.T - (now + 0.005) - 0.015) : barStepsOf(st) * sd;
+  if (lastC && now - lastC.T < 0.16 && lastC.k >= 0) {
+    schedStep(lastC.k, now + 0.005, true, { c: true, b: !redoHasB }, maxGate, true);
+    return;
+  }
+  // Changement en cours de mesure (nappe tenue ou grand écart avant le prochain coup) : on fait entendre le nouvel accord
+  // sans jamais déplacer l'horloge maître ; s'il y a un temps/croche dans les 75 ms, on s'y cale pile dessus.
+  if (st.hold || !nxtC || (nxtC.T - now) > 0.30) {
+    const div = st.div || 4, qStep = div === 24 ? 12 : div === 3 ? 3 : 2;
+    let hitT = now + 0.005;
+    const d0 = -Math.ceil(Math.max(0, acc.nextT - now) / sd);
+    for (let d = d0; d <= qStep; d++) {
+      const k = ((acc.step + d) % st.steps + st.steps) % st.steps;
+      if (k % qStep === 0) {
+        const t = acc.nextT + d * sd;
+        if (t > now + 0.005 && t - now <= 0.075 && (!nxtC || t < nxtC.T - 0.06)) { hitT = t; break; }
+      }
+    }
+    const gate = nxtC ? Math.max(0.05, nxtC.T - hitT - 0.015) : barStepsOf(st) * sd;
     const notes = chordNotes(c), per = Math.min(1, 2.2 / Math.sqrt(notes.length));
-    notes.forEach((n, i) => accNote(n, (i === 0 ? 0.8 : 1) * acc.vel * per * 0.85, S.tPad, busPad, now + 0.005, toEnd, "C", -1));
-    if (S.bassOn) { const bn = bassNote(c, "r"); accNote(bn, 0.8 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1);
-      if (S.bassUp) accNote(bn + 12, 0.36 * acc.vel, S.tBass, busBass, now + 0.005, toEnd, "B", -1); }
+    notes.forEach((n, i) => accNote(n, (i === 0 ? 0.8 : 1) * acc.vel * per * 0.85, S.tPad, busPad, hitT, gate, "C", -1, hitT));
+    if (S.bassOn && !redoHasB && (!nxtB || nxtB.T - hitT > 0.22)) {
+      const bGate = nxtB ? Math.max(0.05, nxtB.T - hitT - 0.015) : gate;
+      const bn = bassNote(c, "r");
+      accNote(bn, 0.8 * acc.vel, S.tBass, busBass, hitT, bGate, "B", -1, hitT);
+      if (S.bassUp) accNote(bn + 12, 0.36 * acc.vel, S.tBass, busBass, hitT, bGate, "B", -1, hitT);
+    }
   }
 }
-// Comme le Key On Sync d'un arpège (Yamaha Montage) : la basse et la batterie continuent sans rien changer ;
-// la partie accords repart du début de son motif à l'instant du toucher, sans se recaler sur leur grille.
-// Les notes de basse déjà programmées (90 ms à venir) sont refaites avec le nouvel accord.
+// Mode optionnel « motif repart au toucher » : le motif d'accords repart de son pas 0, MAIS toujours quantifié sur
+// l'horloge maître de la mesure (acc.nextT) — jamais en roue libre hors mesure.
 function cKeyOn(now) {
+  const st = style(), sd = stepDur(), n = st.steps, bs = barStepsOf(st);
   const isC = r => r.part === "C" || r.part === "A";
+  const pendB = acc.recs.filter(r => r.part === "B" && r.T > now + 0.003);
   const old = acc.recs.filter(r => isC(r) || (r.part === "B" && r.T > now + 0.003));
-  old.forEach(r => { clearTimeout(r.to); r.v.stop(r.T > now ? 0.004 : 0.05); });
+  old.forEach(r => { clearTimeout(r.to); r.v.stop(r.T > now + 0.003 ? 0.004 : 0.05); });
   acc.recs = acc.recs.filter(r => !old.includes(r));
-  [...new Map(old.filter(r => r.part === "B").map(r => [r.T, r.k])).entries()].forEach(([T, k]) => schedStep(k, T, true, { c: false, b: true }));
-  acc.cStep = 0; acc.arpI = 0; acc.cNext = now + 0.005;
+  // Refaire les basses déjà programmées (une seule fois par pas).
+  const bMap = new Map();
+  for (const r of pendB) if (r.k >= 0) bMap.set(r.sT.toFixed(5) + ":" + r.k, [r.sT, r.k]);
+  [...bMap.values()].forEach(([sT, k]) => schedStep(k, sT, true, { c: false, b: true }));
+  // Caler le redémarrage du motif sur le pas maître le plus proche de `now` (jamais d'horloge séparée).
+  const stepsBack = Math.round((acc.nextT - now) / sd);
+  const snapStep = ((acc.step - stepsBack) % n + n) % n;
+  const snapT = acc.nextT - stepsBack * sd;
+  acc.cOff = snapStep % bs; acc.arpI = 0;
+  // Programmer les pas d'accords compris entre snapStep et acc.step (dans la fenêtre d'avance déjà passée par accTick).
+  for (let d = 0; d < stepsBack; d++) {
+    const g = (snapStep + d) % n, sT = snapT + d * sd;
+    const ck = ((g - acc.cOff) % n + n) % n;
+    if (d === 0 && sT <= now + 0.003) schedStep(ck, now + 0.005, true, { c: true, b: false }, 0, true);
+    else if (sT > now + 0.003) schedStep(ck, sT, true, { c: true, b: false });
+  }
   accTick();
 }
 function chordPlay(c, cv) { if (S.accOn) accChord(c, cv); else playChord(c, cv); }
@@ -2206,7 +2295,7 @@ function renderAcc() {
   $("accStyles").innerHTML = fams.map(f => `<div class="lbl" style="margin-top:4px">${f}</div><div class="chips">${Object.entries(STYLES).filter(([, x]) => x.f === f)
     .map(([k, x]) => `<button class="pill ${S.style === k ? "on" : ""}" data-sty="${k}">${x.n}</button>`).join("")}</div>`).join("");
   $("fillsBtn").textContent = S.fills ? "Breaks toutes les 4 mesures ✓" : "Breaks toutes les 4 mesures"; $("fillsBtn").classList.toggle("on", S.fills);
-  $("cSyncBtn").textContent = S.cSync ? "Accords : départ au toucher ✓" : "Accords : départ au toucher"; $("cSyncBtn").classList.toggle("on", S.cSync);
+  $("cSyncBtn").textContent = S.cSync ? "Accords : motif repart au toucher" : "Accords : dans la mesure ✓"; $("cSyncBtn").classList.toggle("on", !S.cSync);
   $("bassOnBtn").textContent = S.bassOn ? "Basse ✓" : "Basse"; $("bassOnBtn").classList.toggle("on", S.bassOn);
   $("drumsBtn").textContent = S.drums ? "Batterie ✓" : "Batterie"; $("drumsBtn").classList.toggle("on", S.drums);
   $("bassOctLbl").textContent = (S.bassOct > 0 ? "+" : "") + (S.bassOct || 0);
@@ -2243,7 +2332,7 @@ $("secRow").addEventListener("click", e => {
     if (acc.run && acc.sec !== "END") {
       // Le break part tout de suite, à la même place dans la mesure ; la variation suit au début de la mesure suivante.
       const fl = fillFor(M, x);
-      if (fl && !String(acc.sec).startsWith("F")) { const pos = acc.step % 96; acc.sec = fl; acc.step = pos; acc.next = x; acc.arpI = 0; }
+      if (fl && !String(acc.sec).startsWith("F")) { const pos = acc.step % 96; acc.sec = fl; acc.step = pos; acc.next = x; acc.arpI = 0; acc.cOff = 0; }
       else acc.next = x;
     }
   }
@@ -2264,7 +2353,7 @@ $("accBox").addEventListener("click", e => {
   if (b) {
     S.style = b.dataset.sty; const M = STYLES[S.style].m;
     if (M) { S.bpm = M.bpm; if (!M.sec[S.msec]) S.msec = "A"; acc.sec = acc.run ? S.msec : acc.sec; acc.next = null; }
-    if (acc.step >= style().steps) acc.step = 0; save(); renderAcc();
+    if (acc.step >= style().steps) acc.step = 0; acc.cOff = 0; acc.cHist = []; save(); renderAcc();
   }
 });
 $("bassOnBtn").onclick = () => { S.bassOn = !S.bassOn; save(); renderAcc(); };
@@ -2283,7 +2372,7 @@ $("kitList").addEventListener("click", e => {
 const bassOct = d => { S.bassOct = Math.max(-2, Math.min(1, (S.bassOct || 0) + d)); save(); renderAcc(); try { tryBass(); } catch (e) {} };
 $("bassOctDn").onclick = () => bassOct(-1); $("bassOctUp").onclick = () => bassOct(1);
 $("bassUpBtn").onclick = () => { S.bassUp = !S.bassUp; save(); renderAcc(); };
-$("cSyncBtn").onclick = () => { S.cSync = !S.cSync; acc.cStep = acc.step; acc.cNext = acc.nextT; save(); renderAcc(); };
+$("cSyncBtn").onclick = () => { S.cSync = !S.cSync; acc.cOff = 0; save(); renderAcc(); };
 $("fillsBtn").onclick = () => { S.fills = !S.fills; save(); renderAcc(); };
 $("drumsBtn").onclick = () => { S.drums = !S.drums; save(); renderAcc(); };
 $("tBass").onclick = () => { $("accBox").style.display = "none"; openSounds("bass"); };
