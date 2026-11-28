@@ -166,6 +166,7 @@
       <span class="tag" style="color:var(--accent)">SOLO</span>
       <span class="title grow" id="scaleTitle"></span>
       <button class="pill" id="tSolo"></button>
+      <button class="pill" id="aftSoloBtn" title="Aftertouch (pression ou glisser sur la touche)"></button>
       <button class="pill" id="pedBtn"></button>
       <button class="pill" id="octDn">−</button>
       <span class="lbl" id="octLbl"></span>
@@ -1574,7 +1575,8 @@ function render() { try { renderMix(); } catch (e) {}
   $("sceneBtn").textContent = S.scene ? "✓ Scène" : "🎬 Scène"; $("sceneBtn").classList.toggle("on", !!S.scene);
   renderCombos(); renderAcc();
   $("pedBtn").textContent = S.ped ? "Pédale ✓" : "Pédale"; $("pedBtn").classList.toggle("on", !!S.ped);
-  $("aftBtn").textContent = S.aft ? "Vibrato : glisser" : "Vibrato : non"; $("aftBtn").classList.toggle("on", !!S.aft);
+  $("aftBtn").textContent = S.aft ? "Vibrato : AT + glisser" : "Vibrato : non"; $("aftBtn").classList.toggle("on", !!S.aft);
+  if ($("aftSoloBtn")) { $("aftSoloBtn").textContent = S.aft ? "AT ✓" : "AT"; $("aftSoloBtn").classList.toggle("on", !!S.aft); }
   $("vPad").value = S.vPad; $("vSolo").value = S.vSolo; $("vRev").value = S.vRev; $("vMax").value = S.vMax;
   // gamme
   const cands = scaleCands();
@@ -1892,16 +1894,18 @@ function aftertouch(e) {
   if (!k || !f) return;
   k.pmin = Math.min(k.pmin, e.pressure); k.pmax = Math.max(k.pmax, e.pressure);
   if (!S.aft) return;
-  if (performance.now() - k.t0 < 60) { k.p0 = Math.max(k.p0, e.pressure || 0); }
-  // Le long de la touche : vertical pour une touche debout, horizontal pour une barre couchée (écran en largeur).
+  if (performance.now() - k.t0 < 45) { k.p0 = Math.max(k.p0, e.pressure || 0); }
+  // Deux gestes naturels sur l'écran : appuyer plus fort (pression matérielle) OU glisser le long de la touche.
   const r = f.el.getBoundingClientRect(), along = r.width > r.height ? Math.abs(e.clientX - k.x0) : Math.abs(e.clientY - k.y0);
   k.dmax = Math.max(k.dmax, along);
-  const aSlide = Math.min(1, Math.max(0, (along - 6) / 54));
-  const aPress = performance.now() - k.t0 >= 60 && e.pressure > 0 && k.p0 > 0 && e.pressure !== 0.5 ? Math.min(1, Math.max(0, (Math.log(e.pressure / k.p0) - 0.14) / 0.55)) : 0;
+  const aSlide = Math.min(1, Math.max(0, (along - 5) / 46));
+  const aPress = performance.now() - k.t0 >= 45 && e.pressure > 0 && k.p0 > 0 && e.pressure !== 0.5
+    ? Math.min(1, Math.max(0, (Math.log(e.pressure / k.p0) - 0.10) / 0.38)) : 0;
   const a = Math.max(aSlide, aPress);
-  if (Math.abs(a - k.a) < 0.03 && !(a === 0 && k.a > 0)) return;
+  if (Math.abs(a - k.a) < 0.025 && !(a === 0 && k.a > 0)) return;
   k.a = a; f.v.mod(a);
-  const vi = $("velInfo"); if (vi) vi.textContent = (lastInfo ? lastInfo + " · " : "") + (a > 0 ? `vibrato ${Math.round(a * 100)} %` : "");
+  if ($("aftSoloBtn")) $("aftSoloBtn").textContent = a > 0.03 ? `AT ${Math.round(a * 100)}%` : (S.aft ? "AT ✓" : "AT");
+  const vi = $("velInfo"); if (vi) vi.textContent = (lastInfo ? lastInfo + " · " : "") + (a > 0 ? `aftertouch ${Math.round(a * 100)} %` : "");
 }
 document.addEventListener("pointermove", e => { if (fingers.has(e.pointerId)) {
   aftertouch(e);
@@ -1920,6 +1924,7 @@ const lift = e => {
     const k = aft.get(e.pointerId);
     if (g) report({ glide: g.notes, moves: g.moves, fin: e.type, ms: Math.round(performance.now() - g.t0), pmin: k && k.pmin, pmax: k && k.pmax, dmax: k && Math.round(k.dmax), mod: k && +k.a.toFixed(2) });
     fingerTo(e.pointerId, null, 0);
+    if ($("aftSoloBtn") && fingers.size === 0) $("aftSoloBtn").textContent = S.aft ? "AT ✓" : "AT";
   }
   aft.delete(e.pointerId);
 };
@@ -2681,7 +2686,7 @@ $("sounds").addEventListener("click", e => {
   if (b) {
     audio();
     const id = b.dataset.snd;
-    if (soundFor === "trk") studio.setSnd(id); else if (soundFor === "solo") S.tSolo = id; else if (soundFor === "bass") S.tBass = id; else S.tPad = id;
+    if (soundFor === "trk") studio.setSnd(id); else if (soundFor === "solo") { S.tSolo = id; if (id.startsWith("sy:") && SY.get(id.slice(3))?.at) S.aft = true; } else if (soundFor === "bass") S.tBass = id; else S.tPad = id;
     save(); hqFree(); preload();
     // Un instrument pas encore chargé : on l'essaie dès qu'il est prêt (en attendant, le synthé de secours).
     const go = () => soundFor === "trk" ? studio.tryIt() : soundFor === "solo" ? trySolo() : soundFor === "bass" ? tryBass() : tryChord();
@@ -2694,6 +2699,34 @@ $("sounds").addEventListener("click", e => {
 });
 $("pedBtn").onclick = () => { S.ped = !S.ped; if (!S.ped) pedOff(); save(); render(); };
 $("aftBtn").onclick = () => { S.aft = !S.aft; save(); render(); };
+if ($("aftSoloBtn")) $("aftSoloBtn").onclick = () => { S.aft = !S.aft; save(); render(); };
+// Clavier MIDI matériel (USB / Bluetooth) : notes solo, Channel/Poly Aftertouch, Mod Wheel (CC1) et Pitch Bend.
+if (navigator.requestMIDIAccess) {
+  const midiNotes = new Map();
+  let midiAt = 0, midiMod = 0;
+  const pushMidiMod = () => { const a = Math.max(midiAt, midiMod); midiNotes.forEach(v => v.mod(a)); if ($("aftSoloBtn") && midiNotes.size) $("aftSoloBtn").textContent = a > 0.03 ? `AT ${Math.round(a * 100)}%` : (S.aft ? "AT ✓" : "AT"); };
+  const bindMidi = inp => { inp.onmidimessage = e => {
+    const [st, d1, d2 = 0] = e.data, cmd = st & 0xF0;
+    if (cmd === 0x90 && d2 > 0) {
+      audio(); const old = midiNotes.get(d1); if (old) old.stop();
+      const v = play(d1, Math.max(0.1, d2 / 127), S.tSolo, busSolo, true);
+      midiNotes.set(d1, v); const a = Math.max(midiAt, midiMod); if (a > 0) v.mod(a);
+    } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+      const v = midiNotes.get(d1); if (v) { v.stop(); midiNotes.delete(d1); }
+      if ($("aftSoloBtn") && midiNotes.size === 0) $("aftSoloBtn").textContent = S.aft ? "AT ✓" : "AT";
+    } else if (cmd === 0xD0) { // Channel Aftertouch
+      midiAt = d1 / 127; pushMidiMod();
+    } else if (cmd === 0xA0) { // Polyphonic Aftertouch
+      const v = midiNotes.get(d1); if (v) v.mod(Math.max(d2 / 127, midiMod));
+    } else if (cmd === 0xB0 && d1 === 1) { // Mod Wheel (CC1)
+      midiMod = d2 / 127; pushMidiMod();
+    } else if (cmd === 0xE0) { // Pitch Bend
+      const b = (((d2 << 7) | d1) - 8192) / 8192;
+      if (S.tSolo.startsWith("sy:")) { const p = synPart(busSolo, S.tSolo.slice(3)); if (p) p.bend(b); }
+    }
+  }; };
+  navigator.requestMIDIAccess().then(ma => { ma.inputs.forEach(bindMidi); ma.onstatechange = () => ma.inputs.forEach(bindMidi); }).catch(() => {});
+}
 $("touch").onclick = () => { S.touchMode = { frappe: "pos", pos: "fixe", fixe: "frappe" }[S.touchMode]; lastInfo = ""; save(); render(); };
 // Octave des accords : −2 à +2 ; un accord qui sonne encore est rejoué à la nouvelle hauteur.
 const octPad = d => { S.octPad = Math.max(-2, Math.min(2, (S.octPad || 0) + d)); save();
