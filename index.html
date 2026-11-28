@@ -481,7 +481,7 @@ const SY = (() => {
     // la vélocité l'ouvre quand on joue fort ; son enveloppe et le LFO passent par le « detune » (en cents).
     const ft = P.f.t, bt = ft.startsWith("lp") ? "lowpass" : ft.startsWith("hp") ? "highpass" : ft === "bp" ? "bandpass" : ft === "notch" ? "notch" : "lowpass";
     const nb = ft.endsWith("24") ? 2 : 1, bq = [];
-    const baseCut = () => Math.min(18000, Math.max(30, P.f.cut * Math.pow(2, P.f.key * (n - 60) / 12) * Math.pow(2, P.f.vel * (vel - 0.6) * 2.5)));
+    const baseCut = (m = n) => Math.min(18000, Math.max(30, P.f.cut * Math.pow(2, P.f.key * (m - 60) / 12) * Math.pow(2, P.f.vel * (vel - 0.6) * 2.5)));
     for (let i = 0; i < nb; i++) { const b = ac.createBiquadFilter(); b.type = bt; b.frequency.value = baseCut();
       b.Q.value = bt === "lowpass" || bt === "highpass" ? 0.7 + P.f.res * (nb === 2 ? 11 : 18) * (i === nb - 1 ? 1 : 0.35) : 0.5 + P.f.res * 12;
       head.connect(b); head = b; bq.push(b); }
@@ -520,9 +520,10 @@ const SY = (() => {
       gw.gain.value = P.noise * 0.35 * (1 - P.ncol); gp.gain.value = P.noise * 0.9 * P.ncol;
       ns.connect(sp); sp.connect(gw, 0); sp.connect(gp, 1); gw.connect(mix); gp.connect(mix); nodes.push(ns); }
     // FM : un sinus à la hauteur de l'oscillateur 2 module la fréquence de l'oscillateur 1 (cloches, pianos FM, basses).
-    let fmG = null;
+    let fmG = null, fmOsc = null, fmRatio = 1;
     if (P.fm > 0 && o1.length) { const O2 = P.o[1], r2 = Math.pow(2, O2.oct + O2.semi / 12);
       const m = ac.createOscillator(); m.frequency.value = f0 * r2; m.detune.value = O2.fine; if (pc) pc.connect(m.detune);
+      fmOsc = m; fmRatio = r2;
       fmG = ac.createGain(); const idx = f0 * P.fm * 6 * (0.5 + 0.7 * vel);
       // l'indice suit l'enveloppe du filtre : brillant à l'attaque, plus rond ensuite
       const [fa, fdc, fs] = P.fe; fmG.gain.setValueAtTime(0, t0); fmG.gain.linearRampToValueAtTime(idx, t0 + Math.max(0.002, fa));
@@ -573,9 +574,11 @@ const SY = (() => {
     nodes.forEach(x => x.start(t0));
     let dead = false;
     const V = { n, vel, t0, amp, bq, pc,
-      // réaccorder (mono / legato) avec le glide
+      // réaccorder (mono / legato) avec le glide + suivi clavier du filtre 24 dB et modulateur FM
       retune(m, t, retrig) { const T = Math.max(ac.currentTime, t || 0), tc = Math.max(0.003, P.glide) / 3;
         oscs.forEach(x => { x.o.frequency.setTargetAtTime(hz(m) * x.ratio, T, tc); if (x.dl) x.dl.delayTime.setTargetAtTime(Math.min(.95, Math.max(.05, x.pw)) / (hz(m) * x.ratio), T, tc); });
+        if (fmOsc) fmOsc.frequency.setTargetAtTime(hz(m) * fmRatio, T, tc);
+        bq.forEach(b => b.frequency.setTargetAtTime(baseCut(m), T, tc));
         V.n = m; if (retrig) { const pk = P.lvl * velA * kc; amp.gain.cancelScheduledValues(T); amp.gain.setValueAtTime(amp.gain.value, T);
           amp.gain.linearRampToValueAtTime(pk, T + Math.max(0.002, a)); amp.gain.setTargetAtTime(Math.max(pk * s, 0.00001), T + Math.max(0.002, a), Math.max(0.005, d) / 3); } },
       // aftertouch expressif (0…1) : vibrato pur en cents + ouverture du filtre 24 dB + crescendo
@@ -700,7 +703,43 @@ const SY = (() => {
     cuivres80: { name: "Cuivres 80", cat: "Cuivres", o: [O("saw", { uni: 2, det: 10 }), O("saw", { fine: 8, lvl: .5 })], f: { t: "lp24", cut: 900, res: .15, env: .5, vel: .6 }, fe: [.08, .5, .45, .3], ae: [.04, .3, .85, .3], fx: { cho: .3, rev: .3 } },
     obxbrass: { name: "Cuivres OB", cat: "Cuivres", o: [O("saw", { fine: -7 }), O("saw", { fine: 7 })], f: { t: "lp12", cut: 1100, res: .1, env: .45, vel: .5 }, fe: [.12, .6, .5, .4], ae: [.06, .4, .85, .35], pe: { amt: -.3, t: .08 }, fx: { cho: .25, rev: .3 } },
     cuivredoux: { name: "Cuivre feutré solo", cat: "Cuivres", mode: "legato", glide: .05, o: [O("warm"), O("pulse", { pw: .3, lvl: .25, fine: 4 })], noise: .03, f: { t: "lp12", cut: 900, env: .4, vel: .7 }, fe: [.06, .4, .5, .2], ae: [.04, .3, .85, .2], l1: { rate: 5.2, delay: .45, pitch: 12 }, fx: { rev: .3 } },
-    // Leads
+    // Leads — Collection Solo Cory Henry / Lingus (Legato + Glide + Filtre 24 dB + Aftertouch)
+    lingus: { name: "Lingus · KingKORG Lead (AT)", cat: "Leads", mode: "legato", glide: .044,
+      o: [O("saw", { lvl: .78 }), O("pulse", { pw: .42, fine: 6, lvl: .56 }), O("square", { oct: -1, fine: -4, lvl: .36 })],
+      sub: .18, f: { t: "lp24", cut: 1150, res: .34, key: .72, env: .36, vel: .52, drive: .24 },
+      fe: [.006, .34, .46, .22], ae: [.004, .22, .92, .16],
+      at: { pitch: 44, rate: 5.4, rateMax: 6.4, cut: 1850, amp: .22 },
+      fx: { drive: .12, dly: .16, dlt: .30, dlf: .22, dpp: 1, rev: .24, rsz: .52 } },
+    corymoog: { name: "Lingus · Moog Sub 37 Solo (AT)", cat: "Leads", mode: "legato", glide: .058,
+      o: [O("saw", { lvl: .80 }), O("saw", { fine: 8, lvl: .62 }), O("square", { oct: -1, fine: -5, lvl: .48 })],
+      sub: .24, f: { t: "lp24", cut: 920, res: .42, key: .68, env: .42, vel: .55, drive: .32 },
+      fe: [.008, .40, .38, .24], ae: [.005, .25, .90, .18],
+      at: { pitch: 42, rate: 5.2, rateMax: 6.1, cut: 1700, amp: .20 },
+      fx: { drive: .16, dly: .14, dlt: .34, dlf: .24, dpp: 1, rev: .22, rsz: .50 } },
+    coryscream: { name: "Lingus · Peak Tube Lead (AT)", cat: "Leads", mode: "legato", glide: .040,
+      o: [O("saw", { uni: 2, det: 9, spr: .35, lvl: .78 }), O("saw", { oct: 1, fine: 5, lvl: .36 }), O("pulse", { pw: .28, oct: -1, lvl: .34 })],
+      fm: .06, f: { t: "lp24", cut: 1650, res: .46, key: .78, env: .40, vel: .58, drive: .42 },
+      fe: [.005, .28, .58, .20], ae: [.004, .20, .94, .16],
+      at: { pitch: 52, rate: 5.8, rateMax: 6.9, cut: 2200, amp: .24 },
+      fx: { drive: .26, cho: .15, chr: .4, chd: .3, dly: .22, dlt: .30, dlf: .28, dpp: 1, rev: .28, rsz: .58 } },
+    corysquare: { name: "Lingus · Hollow Gospel Square (AT)", cat: "Leads", mode: "legato", glide: .052,
+      o: [O("hollow", { lvl: .84 }), O("pulse", { pw: .38, fine: 5, lvl: .44 }), O("triangle", { oct: 1, fine: -3, lvl: .18 })],
+      f: { t: "lp24", cut: 1350, res: .28, key: .70, env: .28, vel: .48, drive: .12 },
+      fe: [.010, .32, .55, .22], ae: [.008, .24, .92, .18], l2: { rate: .7, pw: .28 },
+      at: { pitch: 40, rate: 5.1, rateMax: 6.0, cut: 1550, amp: .22 },
+      fx: { cho: .18, chr: .35, chd: .35, dly: .18, dlt: .36, dlf: .25, dpp: 1, rev: .30, rsz: .62 } },
+    coryfunk: { name: "Lingus · Snarky Funky Sync (AT)", cat: "Leads", mode: "legato", glide: .036,
+      o: [O("pulse", { pw: .22, lvl: .78 }), O("saw", { semi: 7, fine: 4, lvl: .22 }), O("square", { oct: -1, lvl: .32 })],
+      fm: .11, f: { t: "lp24", cut: 1050, res: .54, key: .65, env: .48, vel: .62, drive: .28 },
+      fe: [.004, .22, .34, .18], ae: [.003, .20, .88, .14],
+      at: { pitch: 46, rate: 5.5, rateMax: 6.5, cut: 1900, amp: .22 },
+      fx: { drive: .18, pha: .14, phr: .28, dly: .14, dlt: .28, dlf: .20, dpp: 1, rev: .20, rsz: .46 } },
+    coryorgan: { name: "Lingus · Gospel B3-Synth Lead (AT)", cat: "Leads", mode: "legato", glide: .032,
+      o: [O("organ", { lvl: .76 }), O("warm", { fine: 6, lvl: .52 }), O("saw", { oct: 1, fine: -5, lvl: .22 })],
+      sub: .22, f: { t: "lp24", cut: 1500, res: .24, key: .66, env: .32, vel: .50, drive: .34 },
+      fe: [.004, .18, .52, .16], ae: [.003, .18, .94, .12],
+      at: { pitch: 36, rate: 6.2, rateMax: 7.4, cut: 1650, amp: .24 },
+      fx: { drive: .22, cho: .42, chr: .62, chd: .52, dly: .12, dlt: .30, dlf: .18, dpp: 1, rev: .26, rsz: .55 } },
     leadmoog: { name: "Lead Moog", cat: "Leads", mode: "legato", glide: .06, o: [O("saw"), O("saw", { fine: 9, lvl: .6 }), O("square", { on: 1, oct: -1, lvl: .4 })], f: { t: "lp24", cut: 1200, res: .35, env: .35, vel: .4 }, fe: [.01, .4, .4, .3], ae: [.005, .3, .85, .2], l1: { rate: 5.5, delay: .5, pitch: 10 }, fx: { dly: .2, dlt: .32, rev: .2 } },
     leadsquare: { name: "Lead carré PWM", cat: "Leads", mode: "legato", glide: .04, o: [O("pulse", { pw: .5 })], f: { t: "lp12", cut: 3000, env: .2 }, ae: [.005, .2, .9, .15], l1: { rate: 5, delay: .4, pitch: 10 }, l2: { rate: .6, pw: .5 }, fx: { dly: .25, dlt: .38, rev: .25 } },
     leadsync: { name: "Lead criard", cat: "Leads", mode: "legato", glide: .03, o: [O("saw", { uni: 3, det: 8 }), O("square", { oct: 1, lvl: .3 })], fm: .15, f: { t: "lp24", cut: 2500, res: .45, env: .3 }, fe: [.01, .3, .5, .2], ae: [.005, .2, .9, .2], fx: { drive: .3, dly: .3, rev: .25 } },
@@ -731,7 +770,7 @@ const SY = (() => {
     sciencefic: { name: "Science-fiction", cat: "Ambiances", o: [O("square"), O("saw", { semi: 7, lvl: .5 })], fm: .2, f: { t: "lp24", cut: 1500, res: .6 }, l1: { w: "square", rate: 8, delay: 0, cut: .4 }, l2: { rate: .2, pitch: 30 }, ae: [.3, 1, .9, 1.5], fx: { pha: .5, dly: .4, rev: .5 } },
     drone: { name: "Bourdon", cat: "Ambiances", o: [O("saw", { oct: -1, uni: 3, det: 6 }), O("saw", { semi: 7, lvl: .4 })], sub: .3, f: { t: "lp24", cut: 600, res: .4 }, l2: { rate: .05, cut: .5 }, ae: [2, 1, 1, 3], fx: { pha: .4, rev: .6, rsz: 1 } },
   };
-  const LV = {"fusionbrass": 1.38, "fusionflugel": 1.52, "fusioncs80": 1.15, "jupiter": 1.161, "soie": 0.813, "eveil": 1.189, "verre": 0.989, "choeur": 1.274, "sombre": 0.741, "cordes": 0.933, "cordes2": 0.902, "cuivres80": 0.891, "obxbrass": 0.933, "cuivredoux": 1.622, "leadmoog": 1.334, "leadsquare": 1.259, "leadsync": 0.603, "flutesyn": 1.862, "lead_vangelis": 0.851, "bassemoog": 1.135, "basse303": 1.047, "bassefm": 1.059, "bassesub": 0.556, "reese": 0.596, "pluck": 0.861, "harpe": 1.531, "arpcristal": 1.496, "stab": 0.661, "fmep": 0.624, "orgue": 0.617, "clavi": 4.169, "cloches": 1.084, "vibra": 1.585, "kalimba": 1.303, "nuage": 2.541, "vent": 10.0, "sciencefic": 0.785, "drone": 1.396};   // niveaux mesurés (−18 dB efficaces, crêtes ≤ −2 dB)
+  const LV = {"lingus": 1.32, "corymoog": 1.38, "coryscream": 1.12, "corysquare": 1.45, "coryfunk": 1.36, "coryorgan": 1.24, "fusionbrass": 1.38, "fusionflugel": 1.52, "fusioncs80": 1.15, "jupiter": 1.161, "soie": 0.813, "eveil": 1.189, "verre": 0.989, "choeur": 1.274, "sombre": 0.741, "cordes": 0.933, "cordes2": 0.902, "cuivres80": 0.891, "obxbrass": 0.933, "cuivredoux": 1.622, "leadmoog": 1.334, "leadsquare": 1.259, "leadsync": 0.603, "flutesyn": 1.862, "lead_vangelis": 0.851, "bassemoog": 1.135, "basse303": 1.047, "bassefm": 1.059, "bassesub": 0.556, "reese": 0.596, "pluck": 0.861, "harpe": 1.531, "arpcristal": 1.496, "stab": 0.661, "fmep": 0.624, "orgue": 0.617, "clavi": 4.169, "cloches": 1.084, "vibra": 1.585, "kalimba": 1.303, "nuage": 2.541, "vent": 10.0, "sciencefic": 0.785, "drone": 1.396};   // niveaux mesurés (−18 dB efficaces, crêtes ≤ −2 dB)
   for (const k in FACT) FACT[k] = norm(FACT[k]);
   for (const k in LV) FACT[k].lvl *= LV[k];
   // Les sons à moi : dans le navigateur (même adresse pour la page Synthé et Création), clé « synthe-sons ».
@@ -1811,18 +1850,22 @@ function fingerTo(id, el, y, e) {
   const f = fingers.get(id);
   const n = el ? +el.dataset.n : null;
   if (f && f.n === n) return;
-  if (f) { soloRelease(f); fingers.delete(id); }
   if (n !== null) {
     audio();
     pedOff(n);
-    // En glissant d'une touche à l'autre, la note suivante garde la force de la première.
+    // En glissant d'une touche à l'autre : on déclenche la nouvelle note AVANT de relâcher l'ancienne,
+    // afin que les leads solo en mode « legato » (style Cory Henry / Lingus) glissent sans ré-attaquer.
     const vel = f ? f.vel : touchVel(el, y, e);
     if (e) e.__vel = vel;
     const nf = { n, vel, el, v: play(n, vel, S.tSolo, busSolo, true) };
     fingers.set(id, nf);
+    if (f) soloRelease(f);
     // En glissant, la nouvelle note reprend la modulation en cours.
     const at = aft.get(id); if (f && at && at.a) nf.v.mod(at.a);
     if (!f && e) measureHit(performance.now(), e, v => { nf.v.setVel(v / nf.vel); nf.vel = v; if (fingers.get(id) === nf) lightPads(); });
+  } else if (f) {
+    soloRelease(f);
+    fingers.delete(id);
   }
   lightPads();
 }
@@ -2595,11 +2638,13 @@ function openSounds(which) {
   const sec = (k, t) => `<div class="lbl" data-sec="${k}" style="margin-top:8px;font-weight:800;letter-spacing:1px;color:var(--fg)">${t}</div>`;
   const jprFams = sfFams.filter(f => f.startsWith("★ "));
   const otherSfFams = sfFams.filter(f => !f.startsWith("★ "));
+  const lingusLeads = ["lingus", "corymoog", "coryscream", "corysquare", "coryfunk", "coryorgan"].filter(k => SY.FACT[k]);
   const proLeads = ["fusionbrass", "fusionflugel", "fusioncs80"].filter(k => SY.FACT[k]);
   $("soundJump").innerHTML = [...(jprFams.length ? [["jpr", "★ Jazz·Pop·Rock"]] : []), ["sy", "Synthé"], ["mine", "SoundFonts + Surge"], ["syn", "Synthés"], ["hq", "Instruments"]].map(([k, l]) => `<button class="pill" data-jump="${k}">${l}</button>`).join("");
   const syMine = SY.mine(), syCats = [...new Set(Object.values(SY.FACT).map(p => p.cat))];
   $("soundList").innerHTML =
-    (jprFams.length ? sec("jpr", "★ JAZZ · POP · ROCK PRO — banques studio multi-nuances & leads Fusion (Aftertouch)") +
+    (jprFams.length ? sec("jpr", "★ JAZZ · POP · ROCK PRO — Leads Solo Lingus, Fusion & banques studio") +
+      (lingusLeads.length ? `<div class="lbl">★ Leads Solo · Style Cory Henry / Lingus (Legato · Glide · Filtre 24 dB · Aftertouch)</div><div class="chips">${lingusLeads.map(k => pill("sy:" + k, SY.FACT[k].name)).join("")}</div>` : "") +
       (proLeads.length ? `<div class="lbl">★ Leads Solo Fusion · Soft Brass (vibrato + filtre 24 dB par aftertouch)</div><div class="chips">${proLeads.map(k => pill("sy:" + k, SY.FACT[k].name)).join("")}</div>` : "") +
       jprFams.map(f => `<div class="lbl">${f}</div><div class="chips">${Object.entries(HQ).filter(([, I]) => I.f === f).map(([k, I]) => pill("hq:" + k, I.n + (I.L > 1 ? " ◆" : ""))).join("")}</div>`).join("") : "") +
     sec("sy", "PAGE SYNTHÉ — mes sons, puis ceux d'usine (sans Internet)") +
